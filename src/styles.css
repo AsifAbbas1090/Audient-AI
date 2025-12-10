@@ -1,0 +1,25 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* App globals */
+:root {
+  --ring: theme(colors.brand.500);
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+/* Subtle grid background helper */
+.bg-grid {
+  background-image: radial-gradient(circle at 1px 1px, rgba(99, 102, 241, 0.12) 1px, transparent 0);
+  background-size: 22px 22px;
+}
+
+/* Smooth transitions */
+* {
+  @apply transition-colors duration-200;
+}
+
+

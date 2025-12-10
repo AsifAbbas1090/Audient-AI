@@ -1,0 +1,7 @@
+flask
+flask-cors
+openai-whisper
+pydub
+soundfile
+openai
+python-dotenv
