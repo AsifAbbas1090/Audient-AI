@@ -27,9 +27,9 @@ export default function ASRPage() {
             try {
               const form = new FormData()
               form.append('file', blob, 'speech.webm')
-              // Construct URL based on current hostname to support mobile usage
-              const apiHost = window.location.hostname;
-              const apiUrl = `http://${apiHost}:5000/api/transcribe`;
+              // Construct URL based on environment variable or current hostname
+              const apiBase = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:5000`;
+              const apiUrl = `${apiBase}/api/transcribe`;
               console.log(`Sending audio to: ${apiUrl}`);
 
               const res = await axios.post(apiUrl, form, { headers: { 'Content-Type': 'multipart/form-data' } })
@@ -40,7 +40,7 @@ export default function ASRPage() {
                 // Now extract info
                 setExtracting(true)
                 try {
-                  const extractUrl = `http://${apiHost}:5000/api/extract`;
+                  const extractUrl = `${apiBase}/api/extract`;
                   console.log(`Calling extraction: ${extractUrl} with text: ${transcribedText.substring(0, 50)}...`);
                   const extractRes = await axios.post(extractUrl, { text: transcribedText }, { headers: { 'Content-Type': 'application/json' } })
                   console.log("Extraction result:", extractRes.data);

@@ -27,9 +27,9 @@ export default function LiveSessionPage() {
           // Optional: Create a temporary URL if we want to play it back, but we just transcribe here.
           const form = new FormData()
           form.append('file', blob, 'speech.webm')
-          // Construct URL based on current hostname to support mobile usage
-          const apiHost = window.location.hostname;
-          const apiUrl = `http://${apiHost}:5000/api/transcribe`;
+          // Construct URL based on environment variable or current hostname
+          const apiBase = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:5000`;
+          const apiUrl = `${apiBase}/api/transcribe`;
 
           try {
             const res = await axios.post(apiUrl, form, {
