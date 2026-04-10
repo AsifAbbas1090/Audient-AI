@@ -37,8 +37,9 @@
 ### Requirements
 - Node.js 18+
 - Python 3.9+
-- ffmpeg (required by Whisper/PyDub)
-- OpenAI API Key
+- ffmpeg (required by Whisper/WhisperX/PyDub)
+- **Optional**: OpenAI API Key (only for medical data extraction)
+- **Optional**: Hugging Face token (for two-person speaker diarization; one-time model agreement required)
 
 ### Backend Setup (Flask + Whisper)
 
@@ -58,7 +59,7 @@ pip install -r requirements.txt
 
 # Create .env file (copy from .env.example)
 cp .env.example .env
-# Edit .env and add your OPENAI_API_KEY
+# Edit .env: OPENAI_API_KEY optional (for extraction); HF_TOKEN optional (for two-person diarization)
 
 # Run the server
 python app.py
@@ -83,12 +84,13 @@ npm run dev
 
 ## 🎯 Features
 
-- **🎤 Real-time Audio Recording** - Browser-based audio capture
-- **📝 Speech-to-Text** - OpenAI Whisper for accurate transcription
-- **🤖 AI Extraction** - GPT-4 powered medical data extraction
-- **📊 Structured Output** - Extracts Name, Age, Gender, Disease, Emotional State, etc.
-- **🎨 Modern UI** - Beautiful, responsive interface with Tailwind CSS
-- **📱 Mobile Support** - Works on desktop and mobile browsers
+- **🎤 Two-person, one-mic** - Speaker diarization (Speaker 1 / Speaker 2) from a single microphone
+- **📝 Runtime transcription** - Live transcription every ~5 seconds while recording (chunked uploads)
+- **🌐 Any language → English** - Voice in any language is transcribed and translated to English (offline via Whisper)
+- **📡 Fully offline** - Transcription and diarization run locally (Whisper + WhisperX/pyannote); no cloud STT required
+- **🤖 Optional AI extraction** - When `OPENAI_API_KEY` is set, GPT-4 extracts medical data (Name, Age, Disease, etc.); otherwise skipped
+- **🎨 Modern UI** - Responsive interface with Tailwind CSS
+- **📱 Mobile support** - Works on desktop and mobile browsers
 
 ---
 
@@ -110,9 +112,8 @@ npm run dev
 
 3. **Open Browser**:
    - Navigate to `http://localhost:3000`
-   - Click on "Live English Transcription"
-   - Click "Start Recording" and speak
-   - Click "Stop Recording" to see transcription and AI extraction
+   - **Live session (two-person, runtime)**: Click "Live" or "Start New Session" → Start, speak (any language); transcription updates every ~5s with Speaker 1 / Speaker 2. Requires `HF_TOKEN` in backend for diarization.
+   - **ASR Demo**: Click "ASR Demo" → Start Recording, speak → Stop to see transcription (any language → English) and optional medical extraction if `OPENAI_API_KEY` is set.
 
 ### Test Health Endpoint
 
@@ -158,8 +159,9 @@ VITE_API_URL=http://localhost:5000  # Backend URL
 
 ### Backend (.env)
 ```env
-OPENAI_API_KEY=sk-...              # Your OpenAI API key
-WHISPER_MODEL=base                  # base, small, medium, or large-v3
+OPENAI_API_KEY=sk-...               # Optional: for medical data extraction (GPT-4)
+HF_TOKEN=hf_...                     # Optional: for two-person diarization (accept pyannote model on Hugging Face first)
+WHISPER_MODEL=base                  # base, small, medium, large-v2, or large-v3
 PORT=5000                           # Server port
 ```
 
@@ -180,9 +182,12 @@ PORT=5000                           # Server port
 - Review backend logs for errors
 
 **AI extraction not working**
-- Verify `OPENAI_API_KEY` is set in backend `.env`
-- Check OpenAI API credits
-- Review backend logs for API errors
+- Extraction is optional; if no key is set, the app shows "Extraction unavailable."
+- When using extraction: set `OPENAI_API_KEY` in backend `.env`, check OpenAI API credits and backend logs.
+
+**Two-person diarization (Speaker 1 / Speaker 2) not working**
+- Set `HF_TOKEN` (or `HUGGINGFACE_TOKEN`) in backend `.env`.
+- Create a token at [Hugging Face](https://huggingface.co/settings/tokens) and accept the agreement for `pyannote/speaker-diarization` (or community) model. After first run, models are cached and work offline.
 
 **CORS errors**
 - Ensure backend is running on port 5000
@@ -203,8 +208,9 @@ PORT=5000                           # Server port
 
 ### Backend
 - **Flask** - Web framework
-- **OpenAI Whisper** - Speech-to-text
-- **GPT-4** - AI extraction
+- **OpenAI Whisper** - Speech-to-text (any language → English with `task=translate`)
+- **WhisperX** - Diarization (Speaker 1 / Speaker 2) when `diarize=true`
+- **GPT-4** - Optional medical extraction (when `OPENAI_API_KEY` set)
 - **Flask-CORS** - CORS handling
 - **Gunicorn** - Production server
 
@@ -234,4 +240,3 @@ For technical details, see:
 
 ---
 
-**Made with ❤️ for FYP Project**

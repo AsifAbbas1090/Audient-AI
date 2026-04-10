@@ -1,8 +1,11 @@
 flask
 flask-cors
-openai-whisper
+faster-whisper
+pyannote-audio
 pydub
 soundfile
+torch
+torchaudio
 openai
 python-dotenv
 gunicorn

@@ -5,8 +5,8 @@ import { Button } from './Button'
 
 const navItems = [
   { to: '/app', label: 'Sessions', icon: List },
-  { to: '/live', label: 'Live', icon: Radio },
-  { to: '/asr', label: 'ASR Demo', icon: Mic },
+  { to: '/live', label: 'Two-Person Live', icon: Radio },
+  { to: '/asr', label: 'Two-Person Record', icon: Mic },
   { to: '/analytics', label: 'Analytics', icon: LineChart },
   { to: '/settings', label: 'Settings', icon: Settings },
 ]
@@ -39,7 +39,7 @@ export function Sidebar() {
 
       <div className="mt-6">
         <Button asChild className="w-full" glow>
-          <a href="/live"><Mic className="mr-2" size={16} /> Start New Session</a>
+          <a href="/live"><Mic className="mr-2" size={16} /> Start Two-Person Session</a>
         </Button>
       </div>
     </aside>
