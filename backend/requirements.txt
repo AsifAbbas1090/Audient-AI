@@ -1,11 +1,29 @@
+# Web framework
 flask
 flask-cors
+flask-sqlalchemy
+
+# Database
+sqlalchemy
+psycopg2-binary
+
+# Environment
+python-dotenv
+
+# Speech-to-text
 faster-whisper
-pyannote-audio
-pydub
-soundfile
+
+# Speaker diarization
+pyannote.audio
+
+# Audio / tensor processing
 torch
 torchaudio
+soundfile
+numpy
+
+# LLM extraction
 openai
-python-dotenv
+
+# Production server
 gunicorn
