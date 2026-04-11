@@ -2,46 +2,69 @@ import { Slot } from '@radix-ui/react-slot'
 import { cn } from '../../utils/cn'
 import { motion } from 'framer-motion'
 import React from 'react'
+import { Loader2 } from 'lucide-react'
 
-type Variant = 'primary' | 'secondary' | 'ghost' | 'destructive'
+type Variant = 'primary' | 'secondary' | 'ghost' | 'destructive' | 'outline'
+type Size    = 'xs' | 'sm' | 'md' | 'lg' | 'icon'
 
 type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
-  asChild?: boolean
-  variant?: Variant
-  size?: 'sm' | 'md' | 'lg'
-  glow?: boolean
+  asChild?:  boolean
+  variant?:  Variant
+  size?:     Size
+  glow?:     boolean
+  loading?:  boolean
 }
 
-const base = 'inline-flex items-center justify-center rounded-2xl font-medium focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:opacity-50 disabled:cursor-not-allowed'
-const sizes: Record<NonNullable<ButtonProps['size']>, string> = {
-  sm: 'h-9 px-4 text-sm',
-  md: 'h-11 px-5 text-sm',
-  lg: 'h-12 px-6 text-base'
+const base = [
+  'inline-flex items-center justify-center gap-2',
+  'font-medium rounded-xl',
+  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-400',
+  'disabled:opacity-40 disabled:cursor-not-allowed',
+  'theme-transition',
+].join(' ')
+
+const sizes: Record<Size, string> = {
+  xs:   'h-7 px-3 text-xs rounded-lg',
+  sm:   'h-9 px-4 text-sm',
+  md:   'h-10 px-5 text-sm',
+  lg:   'h-12 px-6 text-base',
+  icon: 'h-10 w-10',
 }
+
 const variants: Record<Variant, string> = {
-  primary: 'bg-brand-600 text-white hover:bg-brand-500 shadow-soft',
-  secondary: 'bg-white/70 text-slate-900 hover:bg-white border border-slate-200 shadow-soft dark:bg-slate-900/60 dark:text-white dark:border-slate-800',
-  ghost: 'bg-transparent hover:bg-slate-100 dark:hover:bg-slate-800',
-  destructive: 'bg-red-600 text-white hover:bg-red-500'
+  primary:     'bg-brand-600 text-white hover:bg-brand-500 shadow-card',
+  secondary:   'bg-white/8 text-slate-200 hover:bg-white/12 border border-white/10 hover:border-white/20 dark:bg-white/5 dark:hover:bg-white/10',
+  ghost:       'text-slate-300 hover:bg-white/8 hover:text-white',
+  destructive: 'bg-red-600 text-white hover:bg-red-500',
+  outline:     'border border-brand-500/50 text-brand-400 hover:bg-brand-500/10 hover:border-brand-500',
 }
 
-export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button({ asChild, className, variant = 'primary', size = 'md', glow, children, ...props }, ref) {
-  const Comp: any = asChild ? Slot : motion.button
-  const glowClass = glow ? 'hover:ring-2 hover:ring-brand-500/30 hover:shadow-soft' : ''
-  const motionProps = asChild ? {} : {
-    whileTap: { scale: 0.98 },
-    whileHover: glow ? { boxShadow: '0 0 0 3px rgba(99,102,241,0.15), 0 10px 30px rgba(99,102,241,0.35)' } : undefined
+export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
+  function Button(
+    { asChild, className, variant = 'primary', size = 'md', glow, loading, children, disabled, ...props },
+    ref
+  ) {
+    const Comp: any = asChild ? Slot : motion.button
+    const motionProps = asChild ? {} : {
+      whileTap: { scale: 0.97 },
+      whileHover: glow
+        ? { boxShadow: '0 0 0 3px rgba(99,102,241,0.2), 0 8px 24px rgba(99,102,241,0.3)' }
+        : undefined,
+    }
+
+    return (
+      <Comp
+        ref={ref as any}
+        className={cn(base, sizes[size], variants[variant], className)}
+        disabled={disabled || loading}
+        {...motionProps}
+        {...props}
+      >
+        {loading
+          ? <><Loader2 size={14} className="animate-spin" />{children}</>
+          : children
+        }
+      </Comp>
+    )
   }
-  return (
-    <Comp
-      ref={ref as any}
-      className={cn(base, sizes[size], variants[variant], glowClass, className)}
-      {...motionProps}
-      {...props}
-    >
-      {children}
-    </Comp>
-  )
-})
-
-
+)
