@@ -1,27 +1,42 @@
-# Dependencies
-**/node_modules/
+# ── Python ────────────────────────────────────────────────────
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/.Python
 **/venv/
 **/.venv/
 
-# Environment
+# ── Environment (secrets) ─────────────────────────────────────
+# .env.example is intentionally committed as a setup template.
+# .env contains real secrets — never commit it.
 .env
 .env.local
 **/.env
-**/.env.example
-.env.example
 
-# Build
+# ── Node / Frontend ───────────────────────────────────────────
+**/node_modules/
 dist/
 build/
 
-# Logs and Temp
+# ── Logs & temp files ─────────────────────────────────────────
 *.log
+debug.log
 **/temp/
-**/__pycache__/
+**/sessions/
 
-# OS
+# ── OS ────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 
-# Documentation
+# ── IDE & editor ──────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+
+# ── Claude Code (local AI assistant config) ───────────────────
+.claude/
+
+# ── Internal docs (not for repo) ──────────────────────────────
 IMPLEMENTATION_DETAILS.md
+MASTER_PLAN.md
