@@ -1,7 +1,8 @@
 import { NavLink, useNavigate } from 'react-router-dom'
-import { Mic, Settings, Radio, LayoutDashboard, LineChart, LogOut, Moon, Sun } from 'lucide-react'
+import { Mic, Settings, Radio, LayoutDashboard, LineChart, LogOut, Moon, Sun, ShieldCheck } from 'lucide-react'
 import { useTheme } from '../providers/ThemeProvider'
 import { cn } from '../../utils/cn'
+import { logout, isAdmin, getUser } from '../../hooks/useAuth'
 
 const navItems = [
   { to: '/app',       label: 'Dashboard',       icon: LayoutDashboard },
@@ -14,10 +15,12 @@ const navItems = [
 export function Sidebar() {
   const { toggle, theme } = useTheme()
   const navigate = useNavigate()
+  const user = getUser()
+  const admin = isAdmin()
 
-  function handleLogout() {
-    localStorage.removeItem('auth')
-    navigate('/login')
+  async function handleLogout() {
+    await logout()
+    navigate('/login', { replace: true })
   }
 
   return (
@@ -56,10 +59,44 @@ export function Sidebar() {
             )}
           </NavLink>
         ))}
+
+        {/* Admin console link — only for admins */}
+        {admin && (
+          <NavLink
+            to="/admin"
+            className={({ isActive }) => cn(
+              'group flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium theme-transition mt-2',
+              isActive
+                ? 'bg-violet-600/20 text-violet-300 border border-violet-500/20'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+            )}
+          >
+            {({ isActive }) => (
+              <>
+                <ShieldCheck size={16} className={isActive ? 'text-violet-400' : 'text-slate-500 group-hover:text-slate-300'} />
+                Admin Console
+                {isActive && <span className="ml-auto h-1.5 w-1.5 rounded-full bg-violet-400" />}
+              </>
+            )}
+          </NavLink>
+        )}
       </nav>
 
       {/* Bottom actions */}
       <div className="px-3 pb-4 space-y-1 border-t border-white/6 pt-4">
+        {/* User pill */}
+        {user && (
+          <div className="flex items-center gap-2 px-2 py-2 mb-2">
+            <div className="h-7 w-7 rounded-full bg-brand-500/20 border border-brand-500/30 flex items-center justify-center shrink-0">
+              <span className="text-xs font-bold text-brand-400">{user.name.charAt(0).toUpperCase()}</span>
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-xs font-medium text-slate-300 truncate">{user.name}</div>
+              <div className="text-[10px] text-slate-500 capitalize">{user.role}</div>
+            </div>
+          </div>
+        )}
+
         <NavLink
           to="/live"
           className="flex items-center justify-center gap-2 w-full h-10 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-sm font-medium shadow-glow theme-transition"

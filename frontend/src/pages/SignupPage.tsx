@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
-import { Mic, User, Mail, Lock, CheckCircle2 } from 'lucide-react'
+import { Mic, User, Mail, Lock, CheckCircle2, Stethoscope, ShieldCheck } from 'lucide-react'
 import { Button } from '../components/ui/Button'
 import { Input }  from '../components/ui/Input'
-import { login }  from '../hooks/useAuth'
+import { register } from '../hooks/useAuth'
 
 const steps = [
   'Real-time transcription in any language',
@@ -12,6 +12,8 @@ const steps = [
   'Privacy-first — no cloud, no telemetry',
 ]
 
+type Role = 'healthcare' | 'admin'
+
 export default function SignupPage() {
   const navigate = useNavigate()
 
@@ -19,17 +21,18 @@ export default function SignupPage() {
   const [email,    setEmail]    = useState('')
   const [password, setPassword] = useState('')
   const [confirm,  setConfirm]  = useState('')
+  const [role,     setRole]     = useState<Role>('healthcare')
   const [agreed,   setAgreed]   = useState(false)
   const [errors,   setErrors]   = useState<Record<string, string>>({})
   const [loading,  setLoading]  = useState(false)
 
   function validate() {
     const e: Record<string, string> = {}
-    if (!name.trim())               e.name     = 'Full name is required.'
-    if (!email.trim())              e.email    = 'Email address is required.'
-    if (password.length < 6)       e.password = 'Password must be at least 6 characters.'
-    if (password !== confirm)       e.confirm  = 'Passwords do not match.'
-    if (!agreed)                    e.agreed   = 'You must accept the terms to continue.'
+    if (!name.trim())         e.name     = 'Full name is required.'
+    if (!email.trim())        e.email    = 'Email address is required.'
+    if (password.length < 6)  e.password = 'Password must be at least 6 characters.'
+    if (password !== confirm)  e.confirm  = 'Passwords do not match.'
+    if (!agreed)               e.agreed   = 'You must accept the terms to continue.'
     return e
   }
 
@@ -40,9 +43,17 @@ export default function SignupPage() {
     if (Object.keys(errs).length > 0) return
 
     setLoading(true)
-    await new Promise(r => setTimeout(r, 700))
-    login(name.trim(), email.trim())
-    navigate('/app')
+    try {
+      const user = await register(name.trim(), email.trim(), password, role)
+      navigate(user.role === 'admin' ? '/admin' : '/app', { replace: true })
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error
+        ?? 'Registration failed. Please try again.'
+      setErrors(prev => ({ ...prev, _form: msg }))
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
@@ -76,7 +87,6 @@ export default function SignupPage() {
             data never touches a server.
           </p>
 
-          {/* Feature checklist */}
           <div className="space-y-3">
             {steps.map(step => (
               <div key={step} className="flex items-center gap-3">
@@ -104,13 +114,11 @@ export default function SignupPage() {
         </div>
 
         <div className="w-full max-w-sm space-y-8">
-          {/* Heading */}
           <div>
             <h2 className="font-display font-bold text-2xl text-white">Create your account</h2>
             <p className="text-slate-400 text-sm mt-1">Start transcribing in under a minute</p>
           </div>
 
-          {/* Form */}
           <form onSubmit={handleSubmit} className="space-y-4">
             <Input
               label="Full name"
@@ -153,6 +161,40 @@ export default function SignupPage() {
               autoComplete="new-password"
             />
 
+            {/* Role selector */}
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-slate-300">Account type</p>
+              <div className="grid grid-cols-2 gap-2">
+                {([
+                  { value: 'healthcare', label: 'Healthcare', icon: Stethoscope, desc: 'Doctor / Clinician' },
+                  { value: 'admin',      label: 'Admin',      icon: ShieldCheck,  desc: 'System Administrator' },
+                ] as const).map(opt => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => setRole(opt.value)}
+                    className={[
+                      'flex flex-col items-start gap-1 rounded-xl border p-3 text-left transition-colors',
+                      role === opt.value
+                        ? 'border-brand-500 bg-brand-500/10 text-white'
+                        : 'border-white/10 bg-white/4 text-slate-400 hover:border-white/20',
+                    ].join(' ')}
+                  >
+                    <opt.icon size={16} className={role === opt.value ? 'text-brand-400' : 'text-slate-500'} />
+                    <span className="text-sm font-medium">{opt.label}</span>
+                    <span className="text-xs opacity-70">{opt.desc}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Form-level error */}
+            {errors._form && (
+              <p className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2.5">
+                {errors._form}
+              </p>
+            )}
+
             {/* Terms */}
             <div>
               <label className="flex items-start gap-3 text-sm text-slate-400 cursor-pointer select-none">
@@ -177,7 +219,6 @@ export default function SignupPage() {
             </Button>
           </form>
 
-          {/* Login link */}
           <p className="text-center text-sm text-slate-400">
             Already have an account?{' '}
             <Link to="/login" className="text-brand-400 hover:text-brand-300 font-medium">

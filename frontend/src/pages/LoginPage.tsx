@@ -3,13 +3,12 @@ import { useNavigate, Link } from 'react-router-dom'
 import { Mic, Mail, Lock, ShieldCheck, Zap, WifiOff } from 'lucide-react'
 import { Button } from '../components/ui/Button'
 import { Input } from '../components/ui/Input'
-import { login } from '../hooks/useAuth'
-import { cn } from '../utils/cn'
+import { login, isAdmin } from '../hooks/useAuth'
 
 const perks = [
-  { icon: WifiOff,    text: 'Fully offline — no data leaves your machine' },
+  { icon: WifiOff,     text: 'Fully offline — no data leaves your machine' },
   { icon: ShieldCheck, text: 'Privacy-first medical transcription' },
-  { icon: Zap,        text: 'Real-time speaker diarization + AI extraction' },
+  { icon: Zap,         text: 'Real-time speaker diarization + AI extraction' },
 ]
 
 export default function LoginPage() {
@@ -29,13 +28,18 @@ export default function LoginPage() {
     }
 
     setLoading(true)
-    // Simulate a brief network delay for realism
-    await new Promise(r => setTimeout(r, 700))
-
-    // Store session — any credentials accepted (UI-only auth)
-    const name = email.split('@')[0] ?? 'User'
-    login(name.charAt(0).toUpperCase() + name.slice(1), email)
-    navigate('/app')
+    try {
+      const user = await login(email.trim(), password)
+      // Role-based redirect
+      navigate(user.role === 'admin' ? '/admin' : '/app', { replace: true })
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error
+        ?? 'Invalid email or password.'
+      setError(msg)
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
@@ -43,7 +47,6 @@ export default function LoginPage() {
 
       {/* ── Left brand panel ───────────────────────────────── */}
       <div className="hidden lg:flex lg:w-1/2 flex-col justify-between p-12 bg-auth-panel relative overflow-hidden">
-        {/* Background decoration */}
         <div className="absolute inset-0 bg-grid-dots bg-grid opacity-20 pointer-events-none" />
         <div className="absolute -top-32 -left-32 h-96 w-96 rounded-full bg-brand-500/20 blur-3xl pointer-events-none" />
         <div className="absolute -bottom-32 -right-32 h-96 w-96 rounded-full bg-violet-500/20 blur-3xl pointer-events-none" />
@@ -70,7 +73,6 @@ export default function LoginPage() {
             and offline AI medical field extraction — all on your machine.
           </p>
 
-          {/* Perk pills */}
           <div className="space-y-3">
             {perks.map(({ icon: Icon, text }) => (
               <div key={text} className="flex items-center gap-3">
@@ -83,7 +85,6 @@ export default function LoginPage() {
           </div>
         </div>
 
-        {/* Footer note */}
         <div className="relative text-xs text-brand-200/40">
           Final Year Project — Medical AI Platform
         </div>
@@ -101,13 +102,11 @@ export default function LoginPage() {
         </div>
 
         <div className="w-full max-w-sm space-y-8">
-          {/* Heading */}
           <div>
             <h2 className="font-display font-bold text-2xl text-white">Welcome back</h2>
             <p className="text-slate-400 text-sm mt-1">Sign in to your account to continue</p>
           </div>
 
-          {/* Form */}
           <form onSubmit={handleSubmit} className="space-y-4">
             <Input
               label="Email address"
@@ -147,7 +146,6 @@ export default function LoginPage() {
             </Button>
           </form>
 
-          {/* Divider hint */}
           <div className="relative">
             <div className="absolute inset-0 flex items-center">
               <div className="w-full border-t border-white/8" />
@@ -157,7 +155,6 @@ export default function LoginPage() {
             </div>
           </div>
 
-          {/* Signup link */}
           <p className="text-center text-sm text-slate-400">
             Don't have an account?{' '}
             <Link to="/signup" className="text-brand-400 hover:text-brand-300 font-medium">
