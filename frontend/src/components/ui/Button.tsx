@@ -18,7 +18,7 @@ type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
 const base = [
   'inline-flex items-center justify-center gap-2',
   'font-medium rounded-xl',
-  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-400',
+  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0a0a0f]',
   'disabled:opacity-40 disabled:cursor-not-allowed',
   'theme-transition',
 ].join(' ')

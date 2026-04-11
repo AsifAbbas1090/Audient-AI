@@ -5,7 +5,6 @@
 /* ── Base ───────────────────────────────────────────────────── */
 @layer base {
   :root {
-    --ring: theme(colors.brand.500);
     color-scheme: dark;
   }
 
@@ -22,74 +21,78 @@
   }
 
   body {
-    @apply bg-surface-400 text-slate-100 font-sans;
-    background-image: theme(backgroundImage.app-bg);
+    /* surface-400 = #0a0a0f */
+    background-color: #0a0a0f;
+    background-image: linear-gradient(135deg, #0a0a0f 0%, #0f0d1f 50%, #0a0a0f 100%);
+    color: #f1f5f9; /* slate-100 */
+    font-family: Inter, system-ui, sans-serif;
   }
 
-  /* Light mode body */
   html.light body {
-    @apply bg-slate-50 text-slate-900;
+    background-color: #f8fafc; /* slate-50 */
     background-image: none;
+    color: #0f172a; /* slate-900 */
   }
 
-  /* Better text selection */
+  /* Text selection */
   ::selection {
-    @apply bg-brand-500/30 text-brand-100;
+    background-color: rgba(99, 102, 241, 0.3);
+    color: #e0e7ff; /* brand-100 */
   }
 
-  /* Focus ring */
+  /* Focus ring — raw values to avoid @apply custom-class issue */
   :focus-visible {
-    @apply outline-none ring-2 ring-brand-500 ring-offset-2 ring-offset-surface-400;
+    outline: none;
+    box-shadow: 0 0 0 2px #0a0a0f, 0 0 0 4px #6366f1;
+  }
+
+  html.light :focus-visible {
+    box-shadow: 0 0 0 2px #f8fafc, 0 0 0 4px #6366f1;
   }
 }
 
 /* ── Custom scrollbar ───────────────────────────────────────── */
 @layer base {
-  ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
-  }
-  ::-webkit-scrollbar-track {
-    background: transparent;
-  }
-  ::-webkit-scrollbar-thumb {
-    @apply bg-slate-700 rounded-full;
-  }
-  ::-webkit-scrollbar-thumb:hover {
-    @apply bg-slate-500;
-  }
+  ::-webkit-scrollbar        { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track  { background: transparent; }
+  ::-webkit-scrollbar-thumb  { background: #334155; border-radius: 9999px; }
+  ::-webkit-scrollbar-thumb:hover { background: #64748b; }
 
-  html.light ::-webkit-scrollbar-thumb {
-    @apply bg-slate-300;
-  }
-  html.light ::-webkit-scrollbar-thumb:hover {
-    @apply bg-slate-400;
-  }
+  html.light ::-webkit-scrollbar-thumb       { background: #cbd5e1; }
+  html.light ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
 }
 
 /* ── Utility classes ────────────────────────────────────────── */
 @layer utilities {
   /* Dot grid background */
   .bg-grid {
-    background-image: theme(backgroundImage.grid-dots);
-    background-size: theme(backgroundSize.grid);
+    background-image: radial-gradient(circle, rgba(99,102,241,0.18) 1px, transparent 1px);
+    background-size: 24px 24px;
   }
 
-  /* Gradient text */
+  /* Animated gradient text */
   .text-gradient {
-    @apply bg-clip-text text-transparent;
+    background-clip: text;
+    -webkit-background-clip: text;
+    color: transparent;
     background-image: linear-gradient(135deg, #818cf8 0%, #a78bfa 50%, #6366f1 100%);
     background-size: 200% 200%;
     animation: gradient-shift 4s ease infinite;
   }
 
-  /* Glass card surface */
+  /* Glass surfaces */
   .glass {
-    @apply bg-white/5 backdrop-blur-xl border border-white/10;
+    background: rgba(255,255,255,0.05);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    border: 1px solid rgba(255,255,255,0.10);
   }
 
   .glass-light {
-    @apply bg-white/80 backdrop-blur-xl border border-slate-200;
+    background: rgba(255,255,255,0.80);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    border: 1px solid #e2e8f0;
   }
 
   /* Skeleton shimmer */
@@ -102,7 +105,7 @@
     );
     background-size: 200% 100%;
     animation: shimmer 2s linear infinite;
-    @apply rounded-lg;
+    border-radius: 0.5rem;
   }
 
   html.light .skeleton {
@@ -115,27 +118,13 @@
     background-size: 200% 100%;
   }
 
-  /* Glow radial overlay (hero) */
+  /* Radial hero glow overlay */
   .bg-glow {
-    background-image: theme(backgroundImage.glow-radial);
+    background-image: radial-gradient(ellipse 80% 60% at 50% -10%, rgba(99,102,241,0.3) 0%, transparent 70%);
     pointer-events: none;
   }
 
-  /* Noise texture overlay for depth */
-  .noise {
-    position: relative;
-  }
-  .noise::after {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
-    opacity: 0.4;
-    pointer-events: none;
-    border-radius: inherit;
-  }
-
-  /* Brand gradient border via pseudo-element */
+  /* Gradient border via pseudo-element */
   .border-gradient {
     position: relative;
     background-clip: padding-box;
@@ -154,12 +143,8 @@
     pointer-events: none;
   }
 
-  /* Smooth transitions for theme switch — only on specific properties */
+  /* Per-component theme transitions (replaces broad * transition) */
   .theme-transition {
-    transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+    transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
   }
 }
-
-/* ── Remove global transition override (was too broad) ──────── */
-/* The previous `* { @apply transition-colors }` caused jank.
-   Per-component transitions are applied explicitly instead. */
