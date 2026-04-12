@@ -5,6 +5,7 @@ import {
   AlertCircle, Loader2, FileText, Brain, User,
   Calendar, HeartPulse, BookOpen, Smile, StickyNote,
   Pencil, X, Check, Plus, Lock, ShieldCheck, Bell,
+  Sparkles, FlaskConical, Stethoscope, TriangleAlert, RefreshCw,
 } from 'lucide-react'
 import { Sidebar }       from '../components/ui/Sidebar'
 import { Button }        from '../components/ui/Button'
@@ -45,6 +46,14 @@ interface SummaryFields {
 
 interface Summary extends SummaryFields {
   field_reminders: FieldReminder[]
+}
+
+interface Recommendations {
+  differential_diagnosis: string[]
+  suggested_tests:        string[]
+  treatment_suggestions:  string[]
+  followup_notes:         string
+  risk_flags:             string[]
 }
 
 interface Conversation {
@@ -107,6 +116,11 @@ export default function SessionDetailPage() {
 
   // Approval
   const [approvingSession, setApprovingSession] = useState(false)
+
+  // AI Recommendations
+  const [recommendations,     setRecommendations]     = useState<Recommendations | null>(null)
+  const [loadingRecommend,    setLoadingRecommend]    = useState(false)
+  const [recommendError,      setRecommendError]      = useState<string | null>(null)
 
   // Summary editing
   const [editingSummary, setEditingSummary] = useState(false)
@@ -211,6 +225,24 @@ export default function SessionDetailPage() {
       toast('Could not approve record', 'error')
     } finally {
       setApprovingSession(false)
+    }
+  }
+
+  // ── AI Recommendations ───────────────────────────────────
+  async function generateRecommendations() {
+    if (!conv) return
+    setLoadingRecommend(true)
+    setRecommendError(null)
+    try {
+      const res = await api.post<{ recommendations: Recommendations }>(
+        `/api/conversations/${conv.id}/recommend`
+      )
+      setRecommendations(res.data.recommendations)
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || 'Could not generate recommendations'
+      setRecommendError(msg)
+    } finally {
+      setLoadingRecommend(false)
     }
   }
 
@@ -631,6 +663,138 @@ export default function SessionDetailPage() {
                   </div>
                 )}
               </Card>
+
+              {/* Clinical Insights card */}
+              {(conv.status === 'complete' || conv.status === 'approved') && (
+                <Card variant="elevated" className="p-5">
+                  <div className="flex items-center justify-between mb-3">
+                    <h2 className="font-semibold text-white text-sm flex items-center gap-2">
+                      <Sparkles size={14} className="text-brand-400" />
+                      Clinical Insights
+                    </h2>
+                    <button
+                      onClick={generateRecommendations}
+                      disabled={loadingRecommend}
+                      className="flex items-center gap-1.5 text-xs text-brand-300 hover:text-brand-200 bg-brand-500/10 hover:bg-brand-500/20 border border-brand-500/20 rounded-lg px-2.5 py-1 transition-all disabled:opacity-50"
+                    >
+                      {loadingRecommend
+                        ? <><Loader2 size={11} className="animate-spin" /> Generating…</>
+                        : recommendations
+                          ? <><RefreshCw size={11} /> Regenerate</>
+                          : <><Sparkles size={11} /> Generate</>
+                      }
+                    </button>
+                  </div>
+
+                  {recommendError && (
+                    <div className="flex items-center gap-2 text-xs text-red-400 bg-red-500/8 border border-red-500/20 rounded-xl px-3 py-2">
+                      <AlertCircle size={12} className="shrink-0" />
+                      {recommendError}
+                    </div>
+                  )}
+
+                  {!recommendations && !loadingRecommend && !recommendError && (
+                    <div className="py-6 text-center">
+                      <Sparkles size={22} className="mx-auto mb-2 text-slate-600" />
+                      <p className="text-xs text-slate-500">Click Generate to get AI clinical insights for this session.</p>
+                    </div>
+                  )}
+
+                  {loadingRecommend && (
+                    <div className="py-6 text-center">
+                      <Loader2 size={22} className="mx-auto mb-2 text-brand-400 animate-spin" />
+                      <p className="text-xs text-slate-500">Analysing transcript with AI…</p>
+                    </div>
+                  )}
+
+                  {recommendations && !loadingRecommend && (() => {
+                    const sections = [
+                      {
+                        icon: Stethoscope,
+                        label: 'Differential Diagnosis',
+                        items: recommendations.differential_diagnosis,
+                        color: 'text-purple-400',
+                        bg:    'bg-purple-500/8 border-purple-500/20',
+                      },
+                      {
+                        icon: FlaskConical,
+                        label: 'Suggested Tests',
+                        items: recommendations.suggested_tests,
+                        color: 'text-sky-400',
+                        bg:    'bg-sky-500/8 border-sky-500/20',
+                      },
+                      {
+                        icon: HeartPulse,
+                        label: 'Treatment Suggestions',
+                        items: recommendations.treatment_suggestions,
+                        color: 'text-emerald-400',
+                        bg:    'bg-emerald-500/8 border-emerald-500/20',
+                      },
+                    ]
+                    return (
+                      <div className="space-y-4">
+                        {sections.map(({ icon: Icon, label, items, color, bg }) =>
+                          items.length > 0 && (
+                            <div key={label}>
+                              <div className={`flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide mb-2 ${color}`}>
+                                <Icon size={10} />
+                                {label}
+                              </div>
+                              <ul className="space-y-1">
+                                {items.map((item, i) => (
+                                  <li
+                                    key={i}
+                                    className={`flex items-start gap-2 text-xs text-slate-300 rounded-lg border px-3 py-2 ${bg}`}
+                                  >
+                                    <span className="mt-0.5 shrink-0 opacity-50">·</span>
+                                    {item}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          )
+                        )}
+
+                        {recommendations.followup_notes && (
+                          <div>
+                            <div className="flex items-center gap-1.5 text-[10px] font-semibold text-amber-400 uppercase tracking-wide mb-2">
+                              <Calendar size={10} />
+                              Follow-up
+                            </div>
+                            <p className="text-xs text-slate-300 leading-relaxed bg-amber-500/8 border border-amber-500/20 rounded-lg px-3 py-2">
+                              {recommendations.followup_notes}
+                            </p>
+                          </div>
+                        )}
+
+                        {recommendations.risk_flags.length > 0 && (
+                          <div>
+                            <div className="flex items-center gap-1.5 text-[10px] font-semibold text-red-400 uppercase tracking-wide mb-2">
+                              <TriangleAlert size={10} />
+                              Risk Flags
+                            </div>
+                            <ul className="space-y-1">
+                              {recommendations.risk_flags.map((flag, i) => (
+                                <li
+                                  key={i}
+                                  className="flex items-start gap-2 text-xs text-red-300 bg-red-500/8 border border-red-500/20 rounded-lg px-3 py-2"
+                                >
+                                  <TriangleAlert size={10} className="shrink-0 mt-0.5" />
+                                  {flag}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+
+                        <p className="text-[10px] text-slate-600 pt-1 border-t border-white/5">
+                          AI suggestions only — requires professional clinical judgment.
+                        </p>
+                      </div>
+                    )
+                  })()}
+                </Card>
+              )}
 
               {/* Field Alerts card */}
               {(() => {

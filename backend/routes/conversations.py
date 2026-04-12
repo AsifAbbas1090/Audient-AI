@@ -8,6 +8,7 @@ Conversation management routes:
   POST   /api/conversations/:id/complete — finalise a live session
   POST   /api/conversations/:id/audio   — upload & store audio file
   PATCH  /api/conversations/:id/reminders/:rid/resolve — resolve a field reminder
+  POST   /api/conversations/:id/recommend             — generate AI clinical insights
 """
 import os
 from datetime import datetime, timezone
@@ -467,6 +468,58 @@ def resolve_reminder(conv_id: str, rid: str):
         return jsonify({"error": str(e)}), 500
 
     return jsonify({"reminder": reminder.to_dict()}), 200
+
+
+# ── AI Clinical Recommendations ──────────────────────────────────────────────
+
+@conversations_bp.route("/<string:conv_id>/recommend", methods=["POST"])
+@require_auth
+def recommend(conv_id: str):
+    """
+    Generate AI clinical insights for a completed/approved session.
+    Calls Groq LLaMA with the transcript + extracted summary.
+
+    Returns:
+      {
+        "recommendations": {
+          "differential_diagnosis": [...],
+          "suggested_tests":        [...],
+          "treatment_suggestions":  [...],
+          "followup_notes":         "...",
+          "risk_flags":             [...]
+        }
+      }
+    """
+    conv = Conversation.query.get(conv_id)
+    if not conv:
+        return jsonify({"error": "Conversation not found"}), 404
+    if conv.user_id and conv.user_id != g.user_id and g.user_role != "admin":
+        return jsonify({"error": "Access denied"}), 403
+    if conv.status not in ("complete", "approved"):
+        return jsonify({"error": "Recommendations are only available for completed sessions."}), 400
+
+    # Build inputs
+    transcript_text = ""
+    if conv.transcript:
+        if conv.transcript.lines:
+            transcript_text = "\n".join(
+                f"{l.speaker or 'Speaker'}: {l.text}"
+                for l in sorted(conv.transcript.lines, key=lambda x: x.line_order)
+            )
+        elif conv.transcript.raw_text:
+            transcript_text = conv.transcript.raw_text
+
+    summary_data = conv.summary.to_dict() if conv.summary else {}
+
+    try:
+        from services.recommend_service import generate_recommendations
+        recs = generate_recommendations(transcript_text, summary_data)
+        return jsonify({"recommendations": recs}), 200
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 503
+    except Exception as e:
+        print(f"[recommend] error: {e}")
+        return jsonify({"error": "Failed to generate recommendations."}), 500
 
 
 # ── Utility ──────────────────────────────────────────────────────────────────
