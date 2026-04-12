@@ -7,6 +7,7 @@ Conversation management routes:
   DELETE /api/conversations/:id          — delete (owner or admin)
   POST   /api/conversations/:id/complete — finalise a live session
   POST   /api/conversations/:id/audio   — upload & store audio file
+  PATCH  /api/conversations/:id/reminders/:rid/resolve — resolve a field reminder
 """
 import os
 from datetime import datetime, timezone
@@ -16,7 +17,7 @@ from werkzeug.utils import secure_filename
 from extensions import db
 from models.conversation import Conversation, AudioFile
 from models.transcript import Transcript, TranscriptLine
-from models.summary import Summary
+from models.summary import Summary, FieldReminder
 from utils.auth import require_auth, optional_auth
 
 conversations_bp = Blueprint("conversations", __name__, url_prefix="/api/conversations")
@@ -84,6 +85,40 @@ def _auto_title(segments: list) -> str:
     return text
 
 
+# Field severity map — determines which missing fields raise alerts and at what level
+_FIELD_SEVERITY: list[tuple[str, str]] = [
+    ("patient_name",    "critical"),
+    ("disease",         "critical"),
+    ("patient_age",     "important"),
+    ("patient_gender",  "important"),
+    ("emotional_state", "important"),
+    ("education",       "optional"),
+    ("additional_notes","optional"),
+]
+
+
+def _generate_field_reminders(summary: "Summary") -> None:
+    """
+    Delete existing unresolved FieldReminder rows for this summary, then
+    create new ones for every medical field that is still blank.
+    Already-resolved reminders are left untouched so the history is preserved.
+    """
+    # Remove previous *unresolved* reminders so we start fresh
+    FieldReminder.query.filter_by(
+        summary_id=summary.id, is_resolved=False
+    ).delete(synchronize_session=False)
+
+    for field_name, severity in _FIELD_SEVERITY:
+        val = getattr(summary, field_name, None)
+        if not val or not str(val).strip():
+            reminder = FieldReminder(
+                summary_id=summary.id,
+                field_name=field_name,
+                severity=severity,
+            )
+            db.session.add(reminder)
+
+
 # ── List ─────────────────────────────────────────────────────────────────────
 
 @conversations_bp.route("", methods=["GET"])
@@ -145,6 +180,9 @@ def create_conversation():
 
         _save_transcript(conv.id, segments, language=language)
         _save_summary(conv.id, extraction)
+        db.session.flush()  # ensure summary.id is set before generating reminders
+        if conv.summary:
+            _generate_field_reminders(conv.summary)
 
         db.session.commit()
         return jsonify({"success": True, "conversation_id": conv.id, "conversation": conv.to_dict()}), 201
@@ -224,6 +262,9 @@ def complete_conversation(conv_id: str):
 
         _save_transcript(conv.id, segments, language=language)
         _save_summary(conv.id, extraction)
+        db.session.flush()
+        if conv.summary:
+            _generate_field_reminders(conv.summary)
 
         db.session.commit()
         return jsonify({"success": True, "conversation": conv.to_dict()}), 200
@@ -328,6 +369,7 @@ def update_summary(conv_id: str):
             if field in data:
                 setattr(summary, field, (data[field] or "").strip() or None)
 
+        _generate_field_reminders(summary)
         db.session.commit()
         return jsonify({"summary": summary.to_dict()}), 200
 
@@ -395,6 +437,36 @@ def upload_audio(conv_id: str):
         db.session.rollback()
         print(f"[conversations/audio] error: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+# ── Resolve a field reminder ─────────────────────────────────────────────────
+
+@conversations_bp.route("/<string:conv_id>/reminders/<string:rid>/resolve", methods=["PATCH"])
+@require_auth
+def resolve_reminder(conv_id: str, rid: str):
+    """Mark a FieldReminder as resolved (dismiss the alert)."""
+    conv = Conversation.query.get(conv_id)
+    if not conv:
+        return jsonify({"error": "Conversation not found"}), 404
+    if conv.user_id != g.user_id and g.user_role != "admin":
+        return jsonify({"error": "Access denied"}), 403
+
+    if not conv.summary:
+        return jsonify({"error": "No summary for this conversation"}), 404
+
+    reminder = FieldReminder.query.filter_by(id=rid, summary_id=conv.summary.id).first()
+    if not reminder:
+        return jsonify({"error": "Reminder not found"}), 404
+
+    reminder.is_resolved = True
+    reminder.resolved_at = datetime.now(timezone.utc)
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+    return jsonify({"reminder": reminder.to_dict()}), 200
 
 
 # ── Utility ──────────────────────────────────────────────────────────────────

@@ -4,7 +4,7 @@ import {
   ArrowLeft, Download, Clock, Globe, CheckCircle2,
   AlertCircle, Loader2, FileText, Brain, User,
   Calendar, HeartPulse, BookOpen, Smile, StickyNote,
-  Pencil, X, Check, Plus, Lock, ShieldCheck,
+  Pencil, X, Check, Plus, Lock, ShieldCheck, Bell,
 } from 'lucide-react'
 import { Sidebar }       from '../components/ui/Sidebar'
 import { Button }        from '../components/ui/Button'
@@ -24,7 +24,15 @@ interface TranscriptLine {
   line_order: number
 }
 
-interface Summary {
+interface FieldReminder {
+  id:          string
+  field_name:  string
+  severity:    'critical' | 'important' | 'optional'
+  is_resolved: boolean
+  resolved_at: string | null
+}
+
+interface SummaryFields {
   patient_name:    string | null
   patient_age:     string | null
   patient_gender:  string | null
@@ -33,6 +41,10 @@ interface Summary {
   emotional_state: string | null
   additional_notes:string | null
   summary_text:    string | null
+}
+
+interface Summary extends SummaryFields {
+  field_reminders: FieldReminder[]
 }
 
 interface Conversation {
@@ -98,7 +110,7 @@ export default function SessionDetailPage() {
 
   // Summary editing
   const [editingSummary, setEditingSummary] = useState(false)
-  const [summaryDraft,   setSummaryDraft]   = useState<Summary>({
+  const [summaryDraft,   setSummaryDraft]   = useState<SummaryFields>({
     patient_name: null, patient_age: null, patient_gender: null,
     disease: null, education: null, emotional_state: null,
     additional_notes: null, summary_text: null,
@@ -199,6 +211,28 @@ export default function SessionDetailPage() {
       toast('Could not approve record', 'error')
     } finally {
       setApprovingSession(false)
+    }
+  }
+
+  // ── Resolve field reminder ───────────────────────────────
+  async function resolveReminder(reminderId: string) {
+    if (!conv) return
+    try {
+      await api.patch(`/api/conversations/${conv.id}/reminders/${reminderId}/resolve`)
+      setConv(prev => {
+        if (!prev?.summary) return prev
+        return {
+          ...prev,
+          summary: {
+            ...prev.summary!,
+            field_reminders: prev.summary!.field_reminders.map(r =>
+              r.id === reminderId ? { ...r, is_resolved: true } : r
+            ),
+          },
+        }
+      })
+    } catch {
+      toast('Could not resolve alert', 'error')
     }
   }
 
@@ -597,6 +631,70 @@ export default function SessionDetailPage() {
                   </div>
                 )}
               </Card>
+
+              {/* Field Alerts card */}
+              {(() => {
+                const reminders = (summary?.field_reminders ?? []).filter(r => !r.is_resolved)
+                if (!reminders.length) return null
+                const severityStyle: Record<string, string> = {
+                  critical:  'border-red-500/30 bg-red-500/8 text-red-300',
+                  important: 'border-amber-500/30 bg-amber-500/8 text-amber-300',
+                  optional:  'border-sky-500/30 bg-sky-500/8 text-sky-300',
+                }
+                const severityDot: Record<string, string> = {
+                  critical:  'bg-red-500',
+                  important: 'bg-amber-400',
+                  optional:  'bg-sky-400',
+                }
+                const fieldLabel: Record<string, string> = {
+                  patient_name:    'Patient Name',
+                  disease:         'Condition / Disease',
+                  patient_age:     'Age',
+                  patient_gender:  'Gender',
+                  emotional_state: 'Emotional State',
+                  education:       'Education',
+                  additional_notes:'Additional Notes',
+                }
+                return (
+                  <Card variant="elevated" className="p-5">
+                    <div className="flex items-center gap-2 mb-3">
+                      <Bell size={14} className="text-amber-400" />
+                      <h2 className="font-semibold text-white text-sm">Field Alerts</h2>
+                      <span className="ml-auto text-[10px] bg-amber-500/15 text-amber-300 border border-amber-500/25 rounded-full px-2 py-0.5 font-medium">
+                        {reminders.length} missing
+                      </span>
+                    </div>
+                    <div className="space-y-2">
+                      {reminders.map(r => (
+                        <div
+                          key={r.id}
+                          className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2 ${severityStyle[r.severity]}`}
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${severityDot[r.severity]}`} />
+                            <span className="text-xs truncate">{fieldLabel[r.field_name] ?? r.field_name}</span>
+                            <span className="text-[10px] opacity-60 shrink-0 capitalize">{r.severity}</span>
+                          </div>
+                          {!isApproved && (
+                            <button
+                              onClick={() => resolveReminder(r.id)}
+                              className="shrink-0 text-[10px] opacity-70 hover:opacity-100 hover:text-white transition-opacity"
+                              title="Dismiss alert"
+                            >
+                              <X size={12} />
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                    {!isApproved && (
+                      <p className="text-[10px] text-slate-600 mt-3">
+                        Fill missing fields via Edit, then alerts will clear automatically.
+                      </p>
+                    )}
+                  </Card>
+                )
+              })()}
 
               {/* Session metadata card */}
               <Card variant="flat" className="p-4">
