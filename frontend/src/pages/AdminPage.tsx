@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import api from '../lib/api'
 import { getUser, logout } from '../hooks/useAuth'
+import { useToast } from '../components/ui/Toaster'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
@@ -45,6 +46,7 @@ function timeAgo(iso: string | null): string {
 export default function AdminPage() {
   const navigate  = useNavigate()
   const me        = getUser()
+  const toast     = useToast()
 
   const [stats,      setStats]      = useState<AdminStats | null>(null)
   const [users,      setUsers]      = useState<AdminUser[]>([])
@@ -81,8 +83,9 @@ export default function AdminPage() {
         prev.map(u => u.id === userId ? { ...u, role: editRole } : u)
       )
       setEditId(null)
-    } catch (e) {
-      console.error(e)
+      toast('Role updated successfully', 'success')
+    } catch {
+      toast('Failed to update role', 'error')
     } finally {
       setSaving(false)
     }
@@ -92,8 +95,9 @@ export default function AdminPage() {
     try {
       await api.delete(`/api/admin/users/${userId}`)
       setUsers(prev => prev.filter(u => u.id !== userId))
-    } catch (e) {
-      console.error(e)
+      toast('User deleted', 'success')
+    } catch {
+      toast('Failed to delete user', 'error')
     } finally {
       setDeleteId(null)
     }
