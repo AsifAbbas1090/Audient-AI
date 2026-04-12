@@ -1,0 +1,284 @@
+"""
+Conversation management routes:
+  GET    /api/conversations           — list current user's conversations
+  POST   /api/conversations           — create & save a new conversation (ASR page)
+  GET    /api/conversations/:id       — get single conversation with transcript + summary
+  PATCH  /api/conversations/:id       — update title/status
+  DELETE /api/conversations/:id       — delete (owner or admin)
+  POST   /api/conversations/:id/complete — finalise a live session
+"""
+from datetime import datetime, timezone
+
+from flask import Blueprint, jsonify, request, g
+from extensions import db
+from models.conversation import Conversation
+from models.transcript import Transcript, TranscriptLine
+from models.summary import Summary
+from utils.auth import require_auth, optional_auth
+
+conversations_bp = Blueprint("conversations", __name__, url_prefix="/api/conversations")
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+def _save_transcript(conv_id: str, segments: list) -> None:
+    """Persist transcript + individual lines for a conversation."""
+    if not segments:
+        return
+
+    raw_text = " ".join(s.get("text", "").strip() for s in segments)
+
+    transcript = Transcript(
+        conversation_id=conv_id,
+        raw_text=raw_text,
+        english_script=raw_text,
+    )
+    db.session.add(transcript)
+    db.session.flush()          # get transcript.id before adding lines
+
+    for i, seg in enumerate(segments):
+        text = (seg.get("text") or "").strip()
+        if not text:
+            continue
+        line = TranscriptLine(
+            transcript_id=transcript.id,
+            speaker=seg.get("speaker", "Speaker 1"),
+            text=text,
+            start_time=seg.get("start"),
+            end_time=seg.get("end"),
+            line_order=i,
+        )
+        db.session.add(line)
+
+
+def _save_summary(conv_id: str, extraction: dict) -> None:
+    """Persist AI-extracted medical fields for a conversation."""
+    if not extraction or extraction.get("skipped") or extraction.get("error"):
+        return
+
+    summary = Summary(
+        conversation_id=conv_id,
+        patient_name=extraction.get("Name"),
+        patient_age=extraction.get("Age"),
+        patient_gender=extraction.get("Gender"),
+        disease=extraction.get("Disease"),
+        education=extraction.get("Education"),
+        emotional_state=extraction.get("EmotionalState"),
+        additional_notes=extraction.get("AdditionalNotes"),
+        extracted_entities=extraction,
+    )
+    db.session.add(summary)
+
+
+def _auto_title(segments: list) -> str:
+    """Generate a session title from the first few words of the transcript."""
+    text = " ".join(s.get("text", "") for s in segments[:3]).strip()
+    if len(text) > 60:
+        text = text[:57] + "…"
+    if not text:
+        text = datetime.now(timezone.utc).strftime("Session %b %d, %H:%M")
+    return text
+
+
+# ── List ─────────────────────────────────────────────────────────────────────
+
+@conversations_bp.route("", methods=["GET"])
+@require_auth
+def list_conversations():
+    """Return conversations belonging to the authenticated user."""
+    query = Conversation.query.filter_by(user_id=g.user_id)
+
+    status = request.args.get("status")
+    if status in ("processing", "complete", "failed"):
+        query = query.filter_by(status=status)
+
+    q = request.args.get("q", "").strip()
+    if q:
+        query = query.filter(Conversation.title.ilike(f"%{q}%"))
+
+    convs = query.order_by(Conversation.created_at.desc()).all()
+    return jsonify({"conversations": [c.to_dict() for c in convs], "total": len(convs)}), 200
+
+
+# ── Create (ASR page — no pre-existing conversation) ─────────────────────────
+
+@conversations_bp.route("", methods=["POST"])
+@optional_auth
+def create_conversation():
+    """
+    Create a conversation and immediately persist transcript + extraction.
+    Used by the ASR (Record & Extract) page after a full recording.
+
+    Body:
+      segments   — list of { speaker, text, start?, end? }
+      extraction — dict of extracted medical fields (or null)
+      duration   — seconds (int, optional)
+      language   — detected language string (optional)
+      title      — override title (optional)
+    """
+    if not _db_available():
+        return jsonify({"error": "Database not configured"}), 503
+
+    data       = request.get_json() or {}
+    segments   = data.get("segments") or []
+    extraction = data.get("extraction") or {}
+    duration   = data.get("duration")
+    language   = data.get("language") or "Unknown"
+    title      = (data.get("title") or "").strip() or _auto_title(segments)
+    user_id    = getattr(g, "user_id", None)
+
+    try:
+        conv = Conversation(
+            title=title,
+            user_id=user_id,
+            status="complete",
+            duration=int(duration) if duration else None,
+            language=language,
+            is_offline=False,
+        )
+        db.session.add(conv)
+        db.session.flush()
+
+        _save_transcript(conv.id, segments)
+        _save_summary(conv.id, extraction)
+
+        db.session.commit()
+        return jsonify({"success": True, "conversation_id": conv.id, "conversation": conv.to_dict()}), 201
+
+    except Exception as e:
+        db.session.rollback()
+        print(f"[conversations/create] error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+# ── Get single ───────────────────────────────────────────────────────────────
+
+@conversations_bp.route("/<string:conv_id>", methods=["GET"])
+@require_auth
+def get_conversation(conv_id: str):
+    conv = Conversation.query.get(conv_id)
+    if not conv:
+        return jsonify({"error": "Conversation not found"}), 404
+    if conv.user_id and conv.user_id != g.user_id and g.user_role != "admin":
+        return jsonify({"error": "Access denied"}), 403
+    return jsonify({"conversation": conv.to_dict_full()}), 200
+
+
+# ── Finalise live session ─────────────────────────────────────────────────────
+
+@conversations_bp.route("/<string:conv_id>/complete", methods=["POST"])
+@optional_auth
+def complete_conversation(conv_id: str):
+    """
+    Finalise a live session that was started with /api/session/start.
+    Updates the existing Conversation row (created at session start)
+    and persists the full transcript + any extraction result.
+
+    Body:
+      segments   — full list of { speaker, text, start?, end? }
+      extraction — dict of extracted medical fields (or null)
+      duration   — elapsed seconds
+      language   — detected language
+      title      — session title (optional)
+    """
+    if not _db_available():
+        return jsonify({"error": "Database not configured"}), 503
+
+    conv = Conversation.query.get(conv_id)
+    if not conv:
+        # Conversation row may not have been created (unauthenticated session)
+        # Create it now so the data is not lost
+        conv = Conversation(id=conv_id, status="processing", is_offline=False)
+        db.session.add(conv)
+        db.session.flush()
+
+    # Check access — allow if conversation has no owner (anonymous) or owner matches
+    user_id = getattr(g, "user_id", None)
+    if conv.user_id and user_id and conv.user_id != user_id and getattr(g, "user_role", "") != "admin":
+        return jsonify({"error": "Access denied"}), 403
+
+    data       = request.get_json() or {}
+    segments   = data.get("segments") or []
+    extraction = data.get("extraction") or {}
+    duration   = data.get("duration")
+    language   = data.get("language") or conv.language or "Unknown"
+    title      = (data.get("title") or "").strip() or _auto_title(segments)
+
+    try:
+        # Update conversation metadata
+        conv.status   = "complete"
+        conv.title    = title
+        conv.duration = int(duration) if duration else conv.duration
+        conv.language = language
+        if user_id and not conv.user_id:
+            conv.user_id = user_id
+
+        # Remove existing transcript if re-saving (idempotent)
+        if conv.transcript:
+            db.session.delete(conv.transcript)
+            db.session.flush()
+
+        _save_transcript(conv.id, segments)
+        _save_summary(conv.id, extraction)
+
+        db.session.commit()
+        return jsonify({"success": True, "conversation": conv.to_dict()}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        print(f"[conversations/complete] error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+# ── Update ───────────────────────────────────────────────────────────────────
+
+@conversations_bp.route("/<string:conv_id>", methods=["PATCH"])
+@require_auth
+def update_conversation(conv_id: str):
+    conv = Conversation.query.get(conv_id)
+    if not conv:
+        return jsonify({"error": "Conversation not found"}), 404
+    if conv.user_id != g.user_id and g.user_role != "admin":
+        return jsonify({"error": "Access denied"}), 403
+
+    data = request.get_json() or {}
+    if "title" in data:
+        conv.title = (data["title"] or "").strip() or conv.title
+    if "status" in data and data["status"] in ("processing", "complete", "failed"):
+        conv.status = data["status"]
+
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+    return jsonify({"conversation": conv.to_dict()}), 200
+
+
+# ── Delete ───────────────────────────────────────────────────────────────────
+
+@conversations_bp.route("/<string:conv_id>", methods=["DELETE"])
+@require_auth
+def delete_conversation(conv_id: str):
+    conv = Conversation.query.get(conv_id)
+    if not conv:
+        return jsonify({"error": "Conversation not found"}), 404
+    if conv.user_id != g.user_id and g.user_role != "admin":
+        return jsonify({"error": "Access denied"}), 403
+
+    try:
+        db.session.delete(conv)
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+    return jsonify({"message": "Conversation deleted"}), 200
+
+
+# ── Utility ──────────────────────────────────────────────────────────────────
+
+def _db_available() -> bool:
+    from config import Config
+    return bool(Config.DATABASE_URL)

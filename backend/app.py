@@ -30,7 +30,27 @@ def create_app() -> Flask:
     # Extensions                                                           #
     # ------------------------------------------------------------------ #
     db.init_app(app)
-    cors.init_app(app, resources={r"/*": {"origins": "*"}})
+    cors.init_app(app, resources={
+        r"/api/*": {
+            "origins": "*",
+            "allow_headers": ["Content-Type", "Authorization"],
+            "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+            "supports_credentials": False,
+        }
+    })
+
+    # Belt-and-suspenders: manually inject CORS headers so OPTIONS
+    # preflight always returns 200 even if flask-cors misses it.
+    @app.after_request
+    def _add_cors_headers(response):
+        response.headers["Access-Control-Allow-Origin"]  = "*"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+        return response
+
+    @app.route("/api/<path:_>", methods=["OPTIONS"])
+    def _options_handler(_):
+        return "", 200
 
     # ------------------------------------------------------------------ #
     # Temp directories                                                     #
@@ -63,27 +83,16 @@ def create_app() -> Flask:
     db_configured = bool(Config.DATABASE_URL)
     diarization_ready = bool(Config.HF_TOKEN)
 
-    print(f"[Boot] Whisper model   : {Config.WHISPER_MODEL}")
-    print(f"[Boot] FFmpeg          : {ffmpeg_found}")
-    print(f"[Boot] HF_HOME         : {Config.HF_HOME}")
-    print(f"[Boot] Diarization     : {'enabled (HF_TOKEN set)' if diarization_ready else 'disabled (no HF_TOKEN)'}")
-    print(f"[Boot] Ollama model    : {Config.OLLAMA_EXTRACT_MODEL} @ {Config.OLLAMA_BASE_URL}")
-    print(f"[Boot] Database        : {'configured' if db_configured else 'NOT configured — set DATABASE_URL in .env'}")
+    groq_ready = bool(Config.GROQ_API_KEY)
+    print(f"[Boot] Groq API        : {'✓ configured' if groq_ready else '✗ NOT set — add GROQ_API_KEY to .env'}")
+    print(f"[Boot] Diarization     : {'✓ enabled (HF_TOKEN set)' if diarization_ready else '✗ disabled — offline only, set HF_TOKEN'}")
+    print(f"[Boot] Ollama fallback : {Config.OLLAMA_EXTRACT_MODEL} @ {Config.OLLAMA_BASE_URL}")
+    print(f"[Boot] Database        : {'✓ configured' if db_configured else '✗ NOT configured — set DATABASE_URL in .env'}")
 
     return app
 
 
-# Pre-load Whisper model at startup (avoid cold-start on first request)
-def _preload_whisper():
-    try:
-        from services import whisper_service
-        whisper_service._get_model()
-    except Exception as e:
-        print(f"[Boot] Whisper preload failed: {e}")
-
-
 app = create_app()
-_preload_whisper()
 
 
 if __name__ == "__main__":
