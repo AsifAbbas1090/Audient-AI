@@ -18,12 +18,19 @@ def _now():
 class Conversation(db.Model):
     __tablename__ = "conversations"
 
-    id = db.Column(db.String(36), primary_key=True, default=_uuid)
-    title = db.Column(db.String(500), nullable=True)
-    date = db.Column(db.DateTime(timezone=True), default=_now)
-    language = db.Column(db.String(50), nullable=True)
-    duration = db.Column(db.Integer, nullable=True)   # seconds
-    status = db.Column(
+    id      = db.Column(db.String(36), primary_key=True, default=_uuid)
+    # FK to users — nullable so existing rows and unauthenticated demos still work
+    user_id = db.Column(
+        db.String(36),
+        db.ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    title    = db.Column(db.String(500), nullable=True)
+    date     = db.Column(db.DateTime(timezone=True), default=_now)
+    language = db.Column(db.String(50),  nullable=True)
+    duration = db.Column(db.Integer,     nullable=True)   # seconds
+    status   = db.Column(
         db.String(20),
         default="processing",
         nullable=False,
@@ -44,12 +51,13 @@ class Conversation(db.Model):
 
     def to_dict(self) -> dict:
         return {
-            "id": self.id,
-            "title": self.title,
-            "date": self.date.isoformat() if self.date else None,
-            "language": self.language,
-            "duration": self.duration,
-            "status": self.status,
+            "id":         self.id,
+            "user_id":    self.user_id,
+            "title":      self.title,
+            "date":       self.date.isoformat() if self.date else None,
+            "language":   self.language,
+            "duration":   self.duration,
+            "status":     self.status,
             "is_offline": self.is_offline,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
