@@ -37,6 +37,8 @@ Thumbs.db
 # ── Claude Code (local AI assistant config) ───────────────────
 .claude/
 
+.*/.example
+
 # ── Internal docs (not for repo) ──────────────────────────────
 IMPLEMENTATION_DETAILS.md
 MASTER_PLAN.md
