@@ -1,9 +1,88 @@
 """
 Diarization service.
-Online mode: returns None (unavailable) — speaker labels default to "Speaker 1".
-Offline mode: set HF_TOKEN in .env to enable pyannote/speaker-diarization-3.1.
+Online  mode (default): Groq LLM infers Doctor/Patient from transcript context.
+Offline mode (optional): set HF_TOKEN in .env + install pyannote.audio for
+                          audio-based diarization (more accurate, works per-chunk).
 """
+import json
+import re
 from typing import List, Dict, Any, Optional
+
+
+def diarize_with_groq(segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Use Groq LLM to assign speaker labels from transcript context alone.
+
+    Strategy: send the numbered segment texts to llama-3.1-8b-instant and ask it
+    to label each line as "Doctor" or "Patient".  Map Doctor→Speaker 1,
+    Patient→Speaker 2 so the labels match what the frontend already expects.
+
+    Falls back silently to the original segments on any error.
+    Requires at least 2 segments with real text to attempt labelling.
+    """
+    from config import Config
+
+    if not Config.GROQ_API_KEY:
+        return segments
+
+    text_segs = [s for s in segments if (s.get("text") or "").strip()]
+    if len(text_segs) < 2:
+        return segments   # not enough context
+
+    try:
+        from groq import Groq
+
+        numbered = "\n".join(
+            f"{i + 1}. {s['text'].strip()}"
+            for i, s in enumerate(text_segs)
+        )
+
+        prompt = (
+            "You are analyzing a medical consultation transcript between a doctor and a patient.\n"
+            "Label each numbered line as either \"Doctor\" or \"Patient\".\n\n"
+            "Rules:\n"
+            "- Doctors ask clinical questions, give diagnoses, prescribe medicines, explain conditions.\n"
+            "- Patients describe symptoms, answer questions, share history, ask about treatment.\n"
+            "- If you are unsure, look at conversational flow (doctor usually speaks first).\n\n"
+            "Return ONLY a JSON array with one label per line, in order.\n"
+            "Example for 4 lines: [\"Doctor\",\"Patient\",\"Doctor\",\"Patient\"]\n\n"
+            f"Transcript:\n{numbered}"
+        )
+
+        client = Groq(api_key=Config.GROQ_API_KEY)
+        resp = client.chat.completions.create(
+            model=Config.GROQ_EXTRACT_MODEL,   # llama-3.1-8b-instant
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=len(text_segs) * 12 + 32,  # ~12 tokens per label
+            temperature=0,
+        )
+        content = (resp.choices[0].message.content or "").strip()
+
+        # Extract JSON array even if the model wraps it in prose
+        match = re.search(r'\[.*?\]', content, re.DOTALL)
+        if not match:
+            print(f"[Diarize/Groq] Could not parse label array from: {content[:120]}")
+            return segments
+
+        labels: List[str] = json.loads(match.group())
+
+        # Map labels back to original segment list (skip empty ones)
+        result = []
+        label_idx = 0
+        for seg in segments:
+            if (seg.get("text") or "").strip():
+                raw_label = labels[label_idx] if label_idx < len(labels) else "Doctor"
+                speaker   = "Speaker 1" if "doctor" in raw_label.lower() else "Speaker 2"
+                result.append({**seg, "speaker": speaker})
+                label_idx += 1
+            else:
+                result.append(seg)
+
+        return result
+
+    except Exception as e:
+        print(f"[Diarize/Groq] Error: {e}")
+        return segments   # return unchanged on any failure
 
 
 def get_pipeline():

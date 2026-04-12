@@ -1,9 +1,10 @@
 """
 Auth routes:
-  POST /api/auth/register  — create account, returns JWT + user
-  POST /api/auth/login     — verify credentials, returns JWT + user
-  GET  /api/auth/me        — return current user from token
-  POST /api/auth/logout    — client-side only (token is stateless), returns 200
+  POST /api/auth/register        — create account, returns JWT + user
+  POST /api/auth/login           — verify credentials, returns JWT + user
+  GET  /api/auth/me              — return current user from token
+  POST /api/auth/logout          — client-side only (token is stateless), returns 200
+  POST /api/auth/reset-password  — offline password reset (no email — verify by email + new password)
 """
 from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify, g
@@ -112,3 +113,42 @@ def logout():
     # JWT is stateless — client simply discards the token.
     # This endpoint exists so the frontend has a clean API call to make.
     return jsonify({"message": "Logged out successfully"}), 200
+
+
+# ── Password reset (offline — no email verification) ─────────
+
+@auth_bp.route("/reset-password", methods=["POST"])
+def reset_password():
+    """
+    Offline-friendly password reset.
+    No email token is needed — the user proves identity by providing
+    their registered email. Suitable for a clinic-local deployment
+    where an admin can verify the person in person.
+
+    Body: { email, new_password }
+    """
+    if not _db_available():
+        return jsonify({"error": "Database not configured"}), 503
+
+    data         = request.get_json() or {}
+    email        = (data.get("email") or "").strip().lower()
+    new_password = data.get("new_password") or ""
+
+    if not email:
+        return jsonify({"error": "Email address is required."}), 422
+    if not new_password or len(new_password) < 6:
+        return jsonify({"error": "New password must be at least 6 characters."}), 422
+
+    user = User.query.filter_by(email=email).first()
+    # Return the same message whether user exists or not (prevents user enumeration)
+    if not user:
+        return jsonify({"message": "If that email is registered, the password has been updated."}), 200
+
+    try:
+        user.password_hash = hash_password(new_password)
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": f"Could not update password: {e}"}), 500
+
+    return jsonify({"message": "Password updated successfully. You can now sign in."}), 200

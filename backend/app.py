@@ -8,6 +8,22 @@ from dotenv import load_dotenv
 # Load .env before anything else so all os.getenv() calls in config.py work
 load_dotenv()
 
+# ── SSL cert fix ───────────────────────────────────────────────────────────
+# SSL_CERT_FILE may be set by a system-wide Python install to a .pem file
+# that no longer exists (e.g. a file someone once downloaded to ~/Downloads).
+# httpx / Groq SDK reads this env var at client construction time and crashes
+# with FileNotFoundError before any network call is made.
+# Fix: if the path is missing, redirect to certifi's bundled CA store.
+_ssl_cert = os.environ.get("SSL_CERT_FILE", "")
+if _ssl_cert and not os.path.isfile(_ssl_cert):
+    try:
+        import certifi
+        os.environ["SSL_CERT_FILE"] = certifi.where()
+        print(f"[SSL] SSL_CERT_FILE was missing — redirected to certifi: {certifi.where()}")
+    except ImportError:
+        del os.environ["SSL_CERT_FILE"]
+        print("[SSL] SSL_CERT_FILE was missing and certifi unavailable — env var removed.")
+
 # Set HF_HOME before any Hugging Face / torch imports
 from config import Config
 os.environ["HF_HOME"] = Config.HF_HOME

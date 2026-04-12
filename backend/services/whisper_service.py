@@ -58,13 +58,22 @@ def transcribe(audio_path: str, task: str = "translate") -> Dict[str, Any]:
                 "text":    (getattr(seg, "text", "") or "").strip(),
                 "speaker": "Speaker 1",  # overwritten by diarization if available
             })
-    elif hasattr(response, "text") and response.text:
-        # Fallback: no segment timestamps — wrap whole text as one segment
-        segments.append({
-            "start":   0.0,
-            "end":     0.0,
-            "text":    response.text.strip(),
-            "speaker": "Speaker 1",
-        })
+
+    # Groq's translations endpoint sometimes returns segment objects with
+    # empty .text but the full transcript on response.text.
+    # Fall back to response.text whenever no segment has actual text.
+    has_text = any(s["text"] for s in segments)
+    if not has_text:
+        full_text = (getattr(response, "text", "") or "").strip()
+        if full_text:
+            # Re-use any timestamps from the empty segments if available
+            start = segments[0]["start"] if segments else 0.0
+            end   = segments[-1]["end"]  if segments else 0.0
+            segments = [{
+                "start":   start,
+                "end":     end,
+                "text":    full_text,
+                "speaker": "Speaker 1",
+            }]
 
     return {"segments": segments, "language": language}
