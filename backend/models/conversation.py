@@ -34,9 +34,10 @@ class Conversation(db.Model):
         db.String(20),
         default="processing",
         nullable=False,
-    )  # processing | complete | failed
-    is_offline = db.Column(db.Boolean, default=True, nullable=False)
-    created_at = db.Column(db.DateTime(timezone=True), default=_now)
+    )  # processing | complete | failed | approved
+    is_offline  = db.Column(db.Boolean, default=True, nullable=False)
+    created_at  = db.Column(db.DateTime(timezone=True), default=_now)
+    approved_at = db.Column(db.DateTime(timezone=True), nullable=True)
 
     # One-to-one relationships (cascade delete children with parent)
     audio_file = db.relationship(
@@ -51,15 +52,16 @@ class Conversation(db.Model):
 
     def to_dict(self) -> dict:
         return {
-            "id":         self.id,
-            "user_id":    self.user_id,
-            "title":      self.title,
-            "date":       self.date.isoformat() if self.date else None,
-            "language":   self.language,
-            "duration":   self.duration,
-            "status":     self.status,
-            "is_offline": self.is_offline,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "id":          self.id,
+            "user_id":     self.user_id,
+            "title":       self.title,
+            "date":        self.date.isoformat() if self.date else None,
+            "language":    self.language,
+            "duration":    self.duration,
+            "status":      self.status,
+            "is_offline":  self.is_offline,
+            "created_at":  self.created_at.isoformat() if self.created_at else None,
+            "approved_at": self.approved_at.isoformat() if self.approved_at else None,
         }
 
     def to_dict_full(self) -> dict:

@@ -245,10 +245,19 @@ def update_conversation(conv_id: str):
     if conv.user_id != g.user_id and g.user_role != "admin":
         return jsonify({"error": "Access denied"}), 403
 
+    # Approved records are locked — only admins can make changes
+    if conv.status == "approved" and g.user_role != "admin":
+        return jsonify({"error": "Record is approved and locked. Contact an admin to make changes."}), 403
+
     data = request.get_json() or {}
     if "title" in data:
         conv.title = (data["title"] or "").strip() or conv.title
-    if "status" in data and data["status"] in ("processing", "complete", "failed"):
+    if "status" in data and data["status"] in ("processing", "complete", "failed", "approved"):
+        if data["status"] == "approved":
+            conv.approved_at = datetime.now(timezone.utc)
+        elif conv.status == "approved":
+            # Un-approving: clear the timestamp
+            conv.approved_at = None
         conv.status = data["status"]
 
     try:
@@ -299,6 +308,8 @@ def update_summary(conv_id: str):
         return jsonify({"error": "Conversation not found"}), 404
     if conv.user_id != g.user_id and g.user_role != "admin":
         return jsonify({"error": "Access denied"}), 403
+    if conv.status == "approved" and g.user_role != "admin":
+        return jsonify({"error": "Record is approved and locked."}), 403
 
     data = request.get_json() or {}
     allowed = {

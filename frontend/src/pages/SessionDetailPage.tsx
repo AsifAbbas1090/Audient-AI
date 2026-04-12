@@ -4,7 +4,7 @@ import {
   ArrowLeft, Download, Clock, Globe, CheckCircle2,
   AlertCircle, Loader2, FileText, Brain, User,
   Calendar, HeartPulse, BookOpen, Smile, StickyNote,
-  Pencil, X, Check, Plus,
+  Pencil, X, Check, Plus, Lock, ShieldCheck,
 } from 'lucide-react'
 import { Sidebar }       from '../components/ui/Sidebar'
 import { Button }        from '../components/ui/Button'
@@ -36,12 +36,13 @@ interface Summary {
 }
 
 interface Conversation {
-  id:         string
-  title:      string | null
-  status:     'complete' | 'processing' | 'failed'
-  language:   string | null
-  duration:   number | null
-  created_at: string
+  id:          string
+  title:       string | null
+  status:      'complete' | 'processing' | 'failed' | 'approved'
+  language:    string | null
+  duration:    number | null
+  created_at:  string
+  approved_at: string | null
   transcript?: {
     raw_text:   string | null
     lines:      TranscriptLine[]
@@ -75,6 +76,7 @@ const statusConfig = {
   complete:   { variant: 'success'  as const, icon: <CheckCircle2 size={13} /> },
   processing: { variant: 'warning'  as const, icon: <Loader2 size={13} className="animate-spin" /> },
   failed:     { variant: 'error'    as const, icon: <AlertCircle size={13} /> },
+  approved:   { variant: 'success'  as const, icon: <ShieldCheck size={13} /> },
 }
 
 // ── Page ─────────────────────────────────────────────────────
@@ -90,6 +92,9 @@ export default function SessionDetailPage() {
   const [titleDraft,    setTitleDraft]    = useState('')
   const [savingTitle,   setSavingTitle]   = useState(false)
   const titleInputRef = useRef<HTMLInputElement>(null)
+
+  // Approval
+  const [approvingSession, setApprovingSession] = useState(false)
 
   // Summary editing
   const [editingSummary, setEditingSummary] = useState(false)
@@ -180,6 +185,23 @@ export default function SessionDetailPage() {
     setEditingSummary(false)
   }
 
+  // ── Approval ──────────────────────────────────────────────
+  async function handleApprove() {
+    if (!conv) return
+    setApprovingSession(true)
+    try {
+      const res = await api.patch(`/api/conversations/${conv.id}`, { status: 'approved' })
+      setConv(prev => prev ? { ...prev, ...res.data.conversation } : prev)
+      setEditingSummary(false)
+      setEditingTitle(false)
+      toast('Record approved and locked', 'success')
+    } catch {
+      toast('Could not approve record', 'error')
+    } finally {
+      setApprovingSession(false)
+    }
+  }
+
   // ── Export ────────────────────────────────────────────────
   const handleExport = () => {
     if (!conv) return
@@ -264,9 +286,10 @@ export default function SessionDetailPage() {
     )
   }
 
-  const lines   = conv.transcript?.lines ?? []
-  const summary = conv.summary
-  const cfg     = statusConfig[conv.status]
+  const lines      = conv.transcript?.lines ?? []
+  const summary    = conv.summary
+  const cfg        = statusConfig[conv.status] ?? statusConfig.complete
+  const isApproved = conv.status === 'approved'
 
   const hasSummary = summary && (
     summary.patient_name || summary.patient_age || summary.patient_gender ||
@@ -290,7 +313,7 @@ export default function SessionDetailPage() {
               <ArrowLeft size={18} />
             </button>
             <div className="min-w-0">
-              {editingTitle ? (
+              {editingTitle && !isApproved ? (
                 <div className="flex items-center gap-2">
                   <input
                     ref={titleInputRef}
@@ -311,16 +334,28 @@ export default function SessionDetailPage() {
                   <h1 className="font-display font-bold text-lg text-white truncate">
                     {conv.title || 'Untitled session'}
                   </h1>
-                  <button
-                    onClick={startEditTitle}
-                    className="p-1 rounded-lg text-slate-600 hover:text-slate-300 hover:bg-white/8 opacity-0 group-hover:opacity-100 transition-all"
-                    title="Edit title"
-                  >
-                    <Pencil size={13} />
-                  </button>
+                  {isApproved
+                    ? <Lock size={13} className="text-emerald-500 shrink-0" />
+                    : (
+                      <button
+                        onClick={startEditTitle}
+                        className="p-1 rounded-lg text-slate-600 hover:text-slate-300 hover:bg-white/8 opacity-0 group-hover:opacity-100 transition-all"
+                        title="Edit title"
+                      >
+                        <Pencil size={13} />
+                      </button>
+                    )
+                  }
                 </div>
               )}
-              <p className="text-xs text-slate-500 mt-0.5">{formatDate(conv.created_at)}</p>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {formatDate(conv.created_at)}
+                {conv.approved_at && (
+                  <span className="ml-2 text-emerald-500">
+                    · Approved {formatDate(conv.approved_at)}
+                  </span>
+                )}
+              </p>
             </div>
           </div>
 
@@ -331,6 +366,20 @@ export default function SessionDetailPage() {
                 {conv.status}
               </span>
             </Badge>
+
+            {/* Approve button — only shown on complete sessions */}
+            {conv.status === 'complete' && (
+              <Button
+                size="sm"
+                onClick={handleApprove}
+                loading={approvingSession}
+                glow
+              >
+                <ShieldCheck size={13} />
+                Approve & Lock
+              </Button>
+            )}
+
             <Button variant="secondary" size="sm" onClick={handleExport}>
               <Download size={13} />
               Export
@@ -340,6 +389,18 @@ export default function SessionDetailPage() {
 
         {/* ── Body ─────────────────────────────────────────── */}
         <div className="flex-1 overflow-y-auto p-6">
+
+          {/* Approved banner */}
+          {isApproved && (
+            <div className="max-w-6xl mx-auto mb-5 flex items-center gap-3 px-4 py-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-sm text-emerald-300">
+              <ShieldCheck size={16} className="text-emerald-400 shrink-0" />
+              <span>
+                This record has been approved and is <strong>locked for editing</strong>.
+                {conv.approved_at && <> Approved on {formatDate(conv.approved_at)}.</>}
+              </span>
+            </div>
+          )}
+
           <div className="max-w-6xl mx-auto grid lg:grid-cols-3 gap-6">
 
             {/* ── Left: transcript ────────────────────────── */}
@@ -422,7 +483,11 @@ export default function SessionDetailPage() {
                     <Brain size={14} className="text-brand-400" />
                     Medical Extraction
                   </h2>
-                  {editingSummary ? (
+                  {isApproved ? (
+                    <div className="flex items-center gap-1.5 text-xs text-emerald-500">
+                      <Lock size={11} /> Locked
+                    </div>
+                  ) : editingSummary ? (
                     <div className="flex items-center gap-2">
                       <button
                         onClick={saveSummary}

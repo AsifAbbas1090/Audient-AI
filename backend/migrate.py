@@ -44,6 +44,11 @@ MIGRATIONS = [
     ALTER TABLE conversations
       ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
     """,
+    # ── conversations (approved_at) ────────────────────────────────────────
+    """
+    ALTER TABLE conversations
+      ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ;
+    """,
     # ── audio_files ────────────────────────────────────────────────────────
     # Entire table may not exist — db.create_all() handles that below,
     # but add the MIME/format column defensively in case table exists without it.
