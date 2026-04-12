@@ -1,50 +1,70 @@
 """
-Whisper service — singleton faster-whisper model.
-Loaded once at startup. All transcription calls go through transcribe().
+Transcription service — Groq Whisper API (online).
+Uses whisper-large-v3 via Groq's free API tier.
+Falls back gracefully if GROQ_API_KEY is not set.
 """
 import os
 from typing import List, Dict, Any
 
-_model = None
 
+def transcribe(audio_path: str, task: str = "translate") -> Dict[str, Any]:
+    """
+    Transcribe audio using Groq Whisper API.
+    task='translate'   → any language to English (uses translations endpoint)
+    task='transcribe'  → keep original language
 
-def _get_model():
-    global _model
-    if _model is None:
-        from faster_whisper import WhisperModel
-        from config import Config
+    Returns dict:
+      {
+        "segments": [{ "start": float, "end": float, "text": str, "speaker": "Speaker 1" }],
+        "language": str  (detected language, "Unknown" for translate task)
+      }
+    """
+    from config import Config
 
-        hf_cache = Config.HF_HOME
-        download_root = os.path.join(hf_cache, "hub")
-        whisper_model = Config.WHISPER_MODEL
-
-        print(f"[Whisper] Loading model '{whisper_model}' (device=cpu, compute=int8)")
-        _model = WhisperModel(
-            whisper_model,
-            device="cpu",
-            compute_type="int8",
-            download_root=download_root,
+    if not Config.GROQ_API_KEY:
+        raise RuntimeError(
+            "GROQ_API_KEY not set. Get a free key at https://console.groq.com"
         )
-        print(f"[Whisper] Model ready.")
-    return _model
 
+    from groq import Groq
+    client = Groq(api_key=Config.GROQ_API_KEY)
 
-def transcribe(audio_path: str, task: str = "translate") -> List[Dict[str, Any]]:
-    """
-    Transcribe audio file. Returns list of segment dicts.
-    task='translate' → any language to English.
-    task='transcribe' → keep original language.
-    """
-    model = _get_model()
-    segments_gen, info = model.transcribe(audio_path, task=task)
+    with open(audio_path, "rb") as f:
+        audio_bytes = f.read()
+
+    filename = os.path.basename(audio_path)
+
+    if task == "translate":
+        response = client.audio.translations.create(
+            file=(filename, audio_bytes),
+            model=Config.GROQ_TRANSCRIBE_MODEL,
+            response_format="verbose_json",
+        )
+    else:
+        response = client.audio.transcriptions.create(
+            file=(filename, audio_bytes),
+            model=Config.GROQ_TRANSCRIBE_MODEL,
+            response_format="verbose_json",
+        )
+
+    language = getattr(response, "language", None) or ("Unknown" if task == "translate" else "Unknown")
 
     segments = []
-    for seg in segments_gen:
+    if hasattr(response, "segments") and response.segments:
+        for seg in response.segments:
+            segments.append({
+                "start":   float(getattr(seg, "start", 0)),
+                "end":     float(getattr(seg, "end",   0)),
+                "text":    (getattr(seg, "text", "") or "").strip(),
+                "speaker": "Speaker 1",  # overwritten by diarization if available
+            })
+    elif hasattr(response, "text") and response.text:
+        # Fallback: no segment timestamps — wrap whole text as one segment
         segments.append({
-            "start": seg.start,
-            "end": seg.end,
-            "text": seg.text or "",
-            "speaker": "Speaker 1",  # default; overwritten by diarization
+            "start":   0.0,
+            "end":     0.0,
+            "text":    response.text.strip(),
+            "speaker": "Speaker 1",
         })
 
-    return segments
+    return {"segments": segments, "language": language}
