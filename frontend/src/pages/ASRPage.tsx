@@ -1,190 +1,385 @@
-import { Sidebar } from '../components/ui/Sidebar'
-import { Button } from '../components/ui/Button'
 import { useEffect, useRef, useState } from 'react'
+import {
+  Mic, RotateCcw, Brain, User, Calendar,
+  HeartPulse, BookOpen, Smile, FileText, Loader2,
+  CheckCircle2, Save,
+} from 'lucide-react'
+import { Sidebar }       from '../components/ui/Sidebar'
+import { Button }        from '../components/ui/Button'
+import { Badge }         from '../components/ui/Badge'
+import { Card }          from '../components/ui/Card'
+import { SpeakerBubble } from '../components/visual/SpeakerBubble'
+import { RecordButton }  from '../components/visual/RecordButton'
+import { Waveform }      from '../components/visual/Waveform'
 import { useMediaRecorder } from '../hooks/useMediaRecorder'
-import axios from 'axios'
+import { useToast }         from '../components/ui/Toaster'
+import api from '../lib/api'
 
-type TranscriptSegment = { speaker: string; text: string }
+// ── Types ────────────────────────────────────────────────────
+type Segment = { speaker: string; text: string; start?: number; end?: number }
 
+type ExtractedInfo = {
+  Name?:           string | null
+  Age?:            string | null
+  Gender?:         string | null
+  Disease?:        string | null
+  Education?:      string | null
+  EmotionalState?: string | null
+  AdditionalNotes?:string | null
+}
+
+// ── Field config ─────────────────────────────────────────────
+const DEMO_FIELDS = [
+  { key: 'Name',      label: 'Patient Name',  icon: User,      span: 1 },
+  { key: 'Age',       label: 'Age',           icon: Calendar,  span: 1 },
+  { key: 'Gender',    label: 'Gender',        icon: User,      span: 1 },
+  { key: 'Education', label: 'Education',     icon: BookOpen,  span: 1 },
+] as const
+
+const CLINICAL_FIELDS = [
+  { key: 'Disease',       label: 'Condition / Disease', icon: HeartPulse, span: 2 },
+  { key: 'EmotionalState',label: 'Emotional State',     icon: Smile,      span: 2 },
+] as const
+
+// ── Page ─────────────────────────────────────────────────────
 export default function ASRPage() {
-  const [text, setText] = useState('')
-  const [segments, setSegments] = useState<TranscriptSegment[]>([])
-  const [loading, setLoading] = useState(false)
-  const { recording, start, stop, reset, getBlob, permissionError, chunks } = useMediaRecorder({ mimeType: 'audio/webm' })
-  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const [segments,    setSegments]    = useState<Segment[]>([])
+  const [rawText,     setRawText]     = useState('')
+  const [info,        setInfo]        = useState<ExtractedInfo | null>(null)
+  const [transcribing,setTranscribing]= useState(false)
+  const [extracting,  setExtracting]  = useState(false)
+  const [noOllama,    setNoOllama]    = useState(false)
+  const [statusMsg,   setStatusMsg]   = useState<string | null>(null)
+  const [isSaving,    setIsSaving]    = useState(false)
+  const [savedId,     setSavedId]     = useState<string | null>(null)
+  const audioRef       = useRef<HTMLAudioElement | null>(null)
+  const recordStartRef = useRef<number>(0)
+  const detectedLang   = useRef<string>('Unknown')
 
-  const [info, setInfo] = useState<{ Name: string | null, Age: string | null, Gender: string | null, Disease: string | null, Education: string | null, EmotionalState: string | null, AdditionalNotes: string | null } | null>(null)
-  const [extracting, setExtracting] = useState(false)
-  const [extractionUnavailable, setExtractionUnavailable] = useState(false)
-  const [diarizationMessage, setDiarizationMessage] = useState<string | null>(null)
+  const toast = useToast()
 
+  const { recording, start, stop, reset, getBlob, permissionError, chunks } =
+    useMediaRecorder({ mimeType: 'audio/webm' })
+
+  // After recording stops → transcribe → extract → save
   useEffect(() => {
-    if (!recording && chunks.length) {
-      const blob = getBlob('audio/webm')
-      if (blob) {
-        const url = URL.createObjectURL(blob)
-        if (audioRef.current) audioRef.current.src = url
+    if (recording || !chunks.length) return
 
-          ; (async () => {
-            setLoading(true)
-            setInfo(null)
-            setSegments([])
-            setExtractionUnavailable(false)
-            setDiarizationMessage(null)
-            const apiBase = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:5000`
-            try {
-              const form = new FormData()
-              form.append('file', blob, 'speech.webm')
-              form.append('translate', 'true')
-              form.append('diarize', 'true')
-              const res = await axios.post(`${apiBase}/api/transcribe`, form, { headers: { 'Content-Type': 'multipart/form-data' } })
-              const transcribedText = res.data.text || ''
-              setText(transcribedText)
-              if (res.data.diarization_skipped) setDiarizationMessage(res.data.diarization_skipped)
-              if (res.data.segments?.length) {
-                setSegments(res.data.segments.map((s: { speaker: string; text: string }) => ({ speaker: s.speaker, text: s.text || '' })))
-              }
+    const blob = getBlob('audio/webm')
+    if (!blob) return
 
-              if (transcribedText) {
-                setExtracting(true)
-                try {
-                  const extractRes = await axios.post(`${apiBase}/api/extract`, { text: transcribedText }, { headers: { 'Content-Type': 'application/json' } })
-                  if (extractRes.data?.skipped) {
-                    setExtractionUnavailable(true)
-                    setInfo(null)
-                  } else {
-                    setInfo(extractRes.data)
-                    setExtractionUnavailable(false)
-                  }
-                } catch (ex) {
-                  console.error("Extraction failed", ex)
-                  setExtractionUnavailable(true)
-                } finally {
-                  setExtracting(false)
-                }
-              }
-            } catch {
-              setText('Error transcribing audio')
-            } finally {
-              setLoading(false)
-            }
-          })()
+    const url = URL.createObjectURL(blob)
+    if (audioRef.current) audioRef.current.src = url
 
-        // Cleanup function to revoke ObjectURL when effect re-runs or component unmounts
-        return () => {
-          URL.revokeObjectURL(url)
+    const run = async () => {
+      setTranscribing(true)
+      setInfo(null)
+      setSegments([])
+      setRawText('')
+      setNoOllama(false)
+      setStatusMsg(null)
+      setSavedId(null)
+      detectedLang.current = 'Unknown'
+
+      let finalSegments: Segment[] = []
+      let finalText     = ''
+      let finalInfo: ExtractedInfo | null = null
+      const duration = Math.round((Date.now() - recordStartRef.current) / 1000)
+
+      try {
+        const form = new FormData()
+        form.append('file', blob, 'speech.webm')
+        form.append('translate', 'true')
+        form.append('diarize',   'true')
+        const res = await api.post('/api/transcribe', form, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        })
+
+        finalText = res.data.text || ''
+        setRawText(finalText)
+        if (res.data.language) detectedLang.current = res.data.language
+        if (res.data.diarization_skipped) setStatusMsg(res.data.diarization_skipped)
+        if (res.data.segments?.length) {
+          finalSegments = res.data.segments.map((s: Segment) => ({
+            speaker: s.speaker || 'Speaker 1',
+            text:    s.text    || '',
+            start:   s.start,
+            end:     s.end,
+          }))
+          setSegments(finalSegments)
+          toast('Transcription complete', 'success')
         }
+
+        if (finalText) {
+          setExtracting(true)
+          try {
+            const exRes = await api.post('/api/extract', { text: finalText })
+            if (exRes.data?.skipped) {
+              setNoOllama(true)
+              toast('Extraction skipped', 'error')
+            } else {
+              finalInfo = exRes.data
+              setInfo(finalInfo)
+              toast('Medical data extracted', 'success')
+            }
+          } catch {
+            setNoOllama(true)
+            toast('Extraction failed', 'error')
+          } finally {
+            setExtracting(false)
+          }
+        }
+      } catch {
+        setStatusMsg('Transcription failed — is the backend running?')
+        toast('Transcription failed', 'error')
+        return
+      } finally {
+        setTranscribing(false)
+      }
+
+      // ── Save to DB ────────────────────────────────────────
+      if (!finalSegments.length && !finalText) return
+      setIsSaving(true)
+      try {
+        const res = await api.post('/api/conversations', {
+          segments:   finalSegments,
+          extraction: finalInfo,
+          duration,
+          language:   detectedLang.current,
+        })
+        setSavedId(res.data.conversation_id)
+        toast('Session saved to history', 'success')
+      } catch {
+        toast('Could not save session to history', 'error')
+      } finally {
+        setIsSaving(false)
       }
     }
+
+    run()
+    return () => URL.revokeObjectURL(url)
   }, [recording, chunks])
 
-  return (
-    <div className="min-h-screen flex">
-      <Sidebar />
-      <main className="flex-1 p-6">
-        <div className="max-w-3xl mx-auto p-6 rounded-3xl border border-slate-200 dark:border-slate-800 bg-white/70 dark:bg-slate-900/50 shadow-soft">
-          <h1 className="text-xl font-semibold">Two-Person Transcription</h1>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Record → any language to English · Offline (Whisper + Ollama)</p>
-          <div className="mt-6 flex flex-col items-center">
-            <div className="w-full h-24 rounded-2xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-500">
-              {permissionError ? permissionError : (recording ? 'Recording…' : 'Idle')}
-            </div>
-            <div className="mt-4 flex gap-3">
-              {!recording ? (
-                <Button glow onClick={() => { reset(); start() }}>Start Recording</Button>
-              ) : (
-                <Button glow onClick={() => stop()}>Stop Recording</Button>
-              )}
-              <Button variant="secondary" onClick={() => { setText(''); setSegments([]); setInfo(null); setExtractionUnavailable(false); setDiarizationMessage(null); reset(); }}>Clear</Button>
-            </div>
-            <div className="mt-6 w-full">
-              <h2 className="text-sm font-medium text-slate-500 dark:text-slate-400 mb-2">Two-person transcription (offline · any language → English)</h2>
-              {diarizationMessage && <div className="text-amber-600 dark:text-amber-400 text-xs mb-2">{diarizationMessage}</div>}
-              {segments.length > 0 ? (
-                <div className="space-y-2 min-h-[96px]">
-                  {segments.map((s, i) => (
-                    <div
-                      key={i}
-                      className={`flex gap-2 items-start text-sm rounded-xl px-3 py-2 ${
-                        s.speaker === 'Speaker 1'
-                          ? 'bg-brand-50 dark:bg-brand-950/30 border-l-4 border-brand-500'
-                          : 'bg-slate-100 dark:bg-slate-800/50 border-l-4 border-slate-400 dark:border-slate-500'
-                      }`}
-                    >
-                      <span className={`font-semibold shrink-0 ${s.speaker === 'Speaker 1' ? 'text-brand-700 dark:text-brand-400' : 'text-slate-600 dark:text-slate-400'}`}>
-                        {s.speaker}:
-                      </span>
-                      <span className="text-slate-700 dark:text-slate-300">{s.text}</span>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="min-h-[96px] p-4 rounded-2xl bg-white/70 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800">
-                  {loading ? 'Transcribing…' : text || '—'}
-                </div>
-              )}
-              <audio ref={audioRef} className="mt-3 w-full" controls />
+  const handleClear = () => {
+    setSegments([])
+    setRawText('')
+    setInfo(null)
+    setNoOllama(false)
+    setStatusMsg(null)
+    setSavedId(null)
+    setIsSaving(false)
+    reset()
+  }
 
-              <div className="mt-8">
-                <h2 className="text-lg font-semibold mb-4">Extracted Information (Ollama)</h2>
-                {extracting && <div className="text-sm text-brand-500 animate-pulse mb-4">Extracting details...</div>}
-                {extractionUnavailable && !extracting && (
-                  <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">Ollama not running. Start with: ollama run llama3.1</p>
+  const handleStart = () => {
+    recordStartRef.current = Date.now()
+    reset()
+    start()
+  }
+
+  const recordState = transcribing || isSaving
+    ? 'processing'
+    : recording
+    ? 'recording'
+    : 'idle'
+
+  const hasResult = segments.length > 0 || rawText
+
+  return (
+    <div className="min-h-screen flex bg-surface-400">
+      <Sidebar />
+
+      <main className="flex-1 flex flex-col overflow-hidden">
+
+        {/* ── Top bar ─────────────────────────────────────── */}
+        <header className="shrink-0 border-b border-white/8 px-6 py-4 flex items-center justify-between">
+          <div>
+            <h1 className="font-display font-bold text-lg text-white">Record & Extract</h1>
+            <p className="text-xs text-slate-500 mt-0.5">Record audio → transcribe → AI medical extraction</p>
+          </div>
+          <div className="flex items-center gap-2">
+            {isSaving && <Badge variant="processing" dot>Saving…</Badge>}
+            {savedId && !isSaving && (
+              <Badge variant="success">
+                <CheckCircle2 size={11} className="mr-1" />
+                Saved
+              </Badge>
+            )}
+            {hasResult && !isSaving && (
+              <Button variant="ghost" size="sm" onClick={handleClear}>
+                <RotateCcw size={13} />
+                Clear
+              </Button>
+            )}
+          </div>
+        </header>
+
+        <div className="flex-1 overflow-y-auto p-6 space-y-6 max-w-4xl mx-auto w-full">
+
+          {/* ── Record card ─────────────────────────────── */}
+          <Card variant="elevated" className="p-6">
+            <div className="flex flex-col items-center gap-6">
+              <RecordButton
+                state={recordState}
+                onClick={recording ? stop : handleStart}
+              />
+
+              <div className="w-full">
+                <Waveform active={recording} />
+              </div>
+
+              {permissionError && (
+                <p className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2.5 w-full text-center">
+                  {permissionError}
+                </p>
+              )}
+              {statusMsg && (
+                <p className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-2 w-full text-center">
+                  {statusMsg}
+                </p>
+              )}
+
+              {/* Playback — only visible after recording */}
+              {hasResult && (
+                <audio ref={audioRef} className="w-full h-10 rounded-xl" controls />
+              )}
+            </div>
+          </Card>
+
+          {/* ── Transcript ──────────────────────────────── */}
+          {(hasResult || transcribing) && (
+            <Card variant="elevated">
+              <div className="flex items-center justify-between px-5 py-4 border-b border-white/8">
+                <h2 className="font-semibold text-white text-sm">Transcript</h2>
+                <div className="flex items-center gap-2">
+                  {transcribing && <Badge variant="default" dot>Transcribing…</Badge>}
+                  {isSaving     && <Badge variant="processing" dot>Saving…</Badge>}
+                  {savedId && !isSaving && (
+                    <a
+                      href={`/app/sessions/${savedId}`}
+                      className="flex items-center gap-1.5 text-xs text-brand-400 hover:text-brand-300 transition-colors"
+                    >
+                      <Save size={11} />
+                      View in History
+                    </a>
+                  )}
+                </div>
+              </div>
+
+              <div className="px-5 py-4 space-y-3 min-h-[80px]">
+                {transcribing && !segments.length && (
+                  <div className="flex items-center gap-2 text-sm text-slate-400">
+                    <Loader2 size={14} className="animate-spin" />
+                    Processing audio with Whisper…
+                  </div>
+                )}
+                {segments.length > 0
+                  ? segments.map((s, i) => (
+                      <SpeakerBubble key={i} speaker={s.speaker} text={s.text} />
+                    ))
+                  : rawText && (
+                      <p className="text-sm text-slate-300 leading-relaxed">{rawText}</p>
+                    )
+                }
+              </div>
+            </Card>
+          )}
+
+          {/* ── Extracted fields ────────────────────────── */}
+          {(extracting || info || noOllama) && (
+            <Card variant="elevated">
+              <div className="flex items-center justify-between px-5 py-4 border-b border-white/8">
+                <h2 className="font-semibold text-white text-sm flex items-center gap-2">
+                  <Brain size={15} className="text-brand-400" />
+                  AI Medical Extraction
+                </h2>
+                {extracting && <Badge variant="default" dot>Extracting…</Badge>}
+                {!extracting && info && <Badge variant="success">Complete</Badge>}
+              </div>
+
+              <div className="p-5">
+                {/* Ollama unavailable */}
+                {noOllama && !extracting && (
+                  <div className="flex items-start gap-3 p-4 rounded-xl bg-amber-500/10 border border-amber-500/20">
+                    <Brain size={16} className="text-amber-400 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-sm font-medium text-amber-300">Ollama not running</p>
+                      <p className="text-xs text-amber-400/70 mt-1">
+                        Start it with: <code className="bg-black/20 px-1 rounded">ollama serve</code> then
+                        pull the model: <code className="bg-black/20 px-1 rounded">ollama pull phi3:mini</code>
+                      </p>
+                    </div>
+                  </div>
                 )}
 
-                {!extractionUnavailable && (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                {/* Loading skeleton */}
+                {extracting && (
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    {Array.from({ length: 6 }).map((_, i) => (
+                      <div key={i} className={`h-20 rounded-xl bg-white/4 animate-pulse ${i >= 4 ? 'col-span-2' : ''}`} />
+                    ))}
+                  </div>
+                )}
 
-                  {/* --- Row 1: Demographics (White Cards) --- */}
-                  {[
-                    { label: 'Name', value: info?.Name },
-                    { label: 'Age', value: info?.Age },
-                    { label: 'Gender', value: info?.Gender },
-                    { label: 'Education', value: info?.Education },
-                  ].map((item, i) => (
-                    <div key={i} className="p-4 rounded-2xl bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700 shadow-sm transition-all hover:shadow-md">
-                      <div className="text-xs text-slate-400 uppercase font-bold tracking-wider mb-1">{item.label}</div>
-                      <div className="font-medium text-slate-900 dark:text-slate-100 truncate" title={item.value || ''}>{item.value || '—'}</div>
+                {/* Fields */}
+                {info && !extracting && (
+                  <div className="space-y-4">
+                    {/* Demographics row */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                      {DEMO_FIELDS.map(({ key, label, icon: Icon }) => (
+                        <div key={key} className="p-4 rounded-xl bg-white/4 border border-white/8">
+                          <div className="flex items-center gap-1.5 mb-2">
+                            <Icon size={12} className="text-slate-500" />
+                            <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">{label}</span>
+                          </div>
+                          <p className="text-sm font-medium text-white truncate">
+                            {info[key as keyof ExtractedInfo] || '—'}
+                          </p>
+                        </div>
+                      ))}
                     </div>
-                  ))}
 
-                  {/* --- Row 2: Clinical & Emotional (Highlighted Cards) --- */}
+                    {/* Clinical row */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {CLINICAL_FIELDS.map(({ key, label, icon: Icon }) => (
+                        <div key={key} className="p-4 rounded-xl bg-brand-500/8 border border-brand-500/15">
+                          <div className="flex items-center gap-1.5 mb-2">
+                            <Icon size={13} className="text-brand-400" />
+                            <span className="text-[10px] font-semibold text-brand-400 uppercase tracking-wide">{label}</span>
+                          </div>
+                          <p className="text-base font-semibold text-brand-200">
+                            {info[key as keyof ExtractedInfo] || '—'}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
 
-                  {/* Disease / Condition */}
-                  <div className="lg:col-span-2 p-5 rounded-2xl bg-brand-50/50 border border-brand-100 dark:bg-brand-900/10 dark:border-brand-800 shadow-sm transition-all hover:shadow-md">
-                    <div className="text-xs text-brand-600 dark:text-brand-400 uppercase font-bold tracking-wider mb-2">Disease / Condition</div>
-                    <div className="text-lg font-medium text-brand-700 dark:text-brand-300">
-                      {info?.Disease || '—'}
+                    {/* Notes */}
+                    <div className="p-4 rounded-xl bg-white/4 border border-white/8">
+                      <div className="flex items-center gap-1.5 mb-2">
+                        <FileText size={12} className="text-slate-500" />
+                        <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">Additional Notes</span>
+                      </div>
+                      <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap">
+                        {info.AdditionalNotes || 'No additional notes.'}
+                      </p>
                     </div>
                   </div>
-
-                  {/* Emotional State */}
-                  <div className="lg:col-span-2 p-5 rounded-2xl bg-brand-50/50 border border-brand-100 dark:bg-brand-900/10 dark:border-brand-800 shadow-sm transition-all hover:shadow-md">
-                    <div className="text-xs text-brand-600 dark:text-brand-400 uppercase font-bold tracking-wider mb-2">Emotional State</div>
-                    <div className="text-lg font-medium text-brand-700 dark:text-brand-300">
-                      {info?.EmotionalState || '—'}
-                    </div>
-                  </div>
-
-                  {/* --- Row 3: Notes (Highlighted Card) --- */}
-
-                  {/* Additional Notes */}
-                  <div className="lg:col-span-4 md:col-span-2 p-5 rounded-2xl bg-brand-50/50 border border-brand-100 dark:bg-brand-900/10 dark:border-brand-800 shadow-sm transition-all hover:shadow-md">
-                    <div className="text-xs text-brand-600 dark:text-brand-400 uppercase font-bold tracking-wider mb-2">Additional Notes / Unstructured Data</div>
-                    <p className="text-sm text-brand-800 dark:text-brand-200 leading-relaxed whitespace-pre-wrap">
-                      {info?.AdditionalNotes || 'No additional notes provided.'}
-                    </p>
-                  </div>
-
-                </div>
                 )}
               </div>
+            </Card>
+          )}
+
+          {/* ── Empty state ──────────────────────────────── */}
+          {!hasResult && !transcribing && (
+            <div className="text-center py-16 text-slate-500">
+              <Mic size={36} className="mx-auto mb-4 opacity-20" />
+              <p className="text-sm">Press the button above to start recording</p>
+              <p className="text-xs mt-1 opacity-60">Whisper transcribes · phi3:mini extracts medical data</p>
             </div>
-          </div>
+          )}
         </div>
       </main>
     </div>
   )
 }
-
-
