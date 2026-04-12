@@ -44,7 +44,10 @@ def transcribe_audio():
         return jsonify({"error": "GROQ_API_KEY not set — add it to .env"}), 503
 
     # ── Save uploaded file ───────────────────────────────────────
-    original_name = secure_filename(audio_file.filename) or f"{uuid.uuid4()}.webm"
+    # Always use a UUID prefix so concurrent requests never share a path.
+    # (Two chunks named "speech.webm" arriving simultaneously would collide.)
+    ext           = os.path.splitext(secure_filename(audio_file.filename or "audio.webm"))[1] or ".webm"
+    original_name = f"{uuid.uuid4()}{ext}"
     input_path    = os.path.join(Config.TEMP_DIR, original_name)
     audio_file.save(input_path)
 
@@ -56,11 +59,16 @@ def transcribe_audio():
         )
 
     translate  = _bool("translate")
+    diarize    = _bool("diarize")
     session_id = (request.args.get("session_id") or request.form.get("session_id") or "").strip()
 
     try:
+        file_size = os.path.getsize(input_path)
+        print(f"[transcribe] file={original_name} size={file_size}B translate={translate} diarize={diarize}")
+
         # ── Silence / empty check ────────────────────────────────
         if audio_service.is_silent(input_path):
+            print(f"[transcribe] SILENT (size={file_size}B < 500B) — skipping Groq")
             return jsonify({"segments": [], "text": ""}), 200
 
         # ── Track session (no WAV accumulation in online mode) ───
@@ -68,18 +76,36 @@ def transcribe_audio():
             pass  # session tracking only; diarization handled server-side when offline
 
         # ── Transcribe via Groq ──────────────────────────────────
-        task   = "translate" if translate else "transcribe"
-        result = whisper_service.transcribe(input_path, task=task)
+        task      = "translate" if translate else "transcribe"
+        result    = whisper_service.transcribe(input_path, task=task)
         segments  = result["segments"]
         language  = result.get("language", "Unknown")
         full_text = " ".join(s["text"].strip() for s in segments if s.get("text")).strip()
+        print(f"[transcribe] Groq → language={language} segments={len(segments)} text_len={len(full_text)}")
 
-        return jsonify({
-            "segments":            segments,
-            "text":                full_text,
-            "language":            language,
-            "diarization_skipped": "Speaker diarization requires HF_TOKEN (offline setup).",
-        })
+        # ── Speaker diarization ──────────────────────────────────
+        # For full recordings (ASR page) with enough segments, use
+        # Groq LLM to assign Doctor / Patient labels in one pass.
+        # Live session chunks are too short for useful per-chunk labels;
+        # the frontend polls /api/session/diarize every 12 s instead.
+        diarization_note = None
+        if diarize and len(segments) >= 2:
+            from services import diarize_service
+            if Config.GROQ_API_KEY:
+                segments = diarize_service.diarize_with_groq(segments)
+                diarization_note = "Speaker labels assigned via Groq LLM."
+            else:
+                diarization_note = "Set GROQ_API_KEY or HF_TOKEN to enable speaker labels."
+
+        response_body: dict = {
+            "segments": segments,
+            "text":     full_text,
+            "language": language,
+        }
+        if diarization_note:
+            response_body["diarization_note"] = diarization_note
+
+        return jsonify(response_body)
 
     except Exception as e:
         print(f"[transcribe] error: {e}")

@@ -1,17 +1,20 @@
 """
 Conversation management routes:
-  GET    /api/conversations           — list current user's conversations
-  POST   /api/conversations           — create & save a new conversation (ASR page)
-  GET    /api/conversations/:id       — get single conversation with transcript + summary
-  PATCH  /api/conversations/:id       — update title/status
-  DELETE /api/conversations/:id       — delete (owner or admin)
+  GET    /api/conversations              — list current user's conversations
+  POST   /api/conversations              — create & save a new conversation (ASR page)
+  GET    /api/conversations/:id          — get single conversation with transcript + summary
+  PATCH  /api/conversations/:id          — update title/status
+  DELETE /api/conversations/:id          — delete (owner or admin)
   POST   /api/conversations/:id/complete — finalise a live session
+  POST   /api/conversations/:id/audio   — upload & store audio file
 """
+import os
 from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request, g
+from werkzeug.utils import secure_filename
 from extensions import db
-from models.conversation import Conversation
+from models.conversation import Conversation, AudioFile
 from models.transcript import Transcript, TranscriptLine
 from models.summary import Summary
 from utils.auth import require_auth, optional_auth
@@ -21,7 +24,7 @@ conversations_bp = Blueprint("conversations", __name__, url_prefix="/api/convers
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-def _save_transcript(conv_id: str, segments: list) -> None:
+def _save_transcript(conv_id: str, segments: list, language: str | None = None) -> None:
     """Persist transcript + individual lines for a conversation."""
     if not segments:
         return
@@ -32,6 +35,7 @@ def _save_transcript(conv_id: str, segments: list) -> None:
         conversation_id=conv_id,
         raw_text=raw_text,
         english_script=raw_text,
+        language_detected=language or "Unknown",
     )
     db.session.add(transcript)
     db.session.flush()          # get transcript.id before adding lines
@@ -139,7 +143,7 @@ def create_conversation():
         db.session.add(conv)
         db.session.flush()
 
-        _save_transcript(conv.id, segments)
+        _save_transcript(conv.id, segments, language=language)
         _save_summary(conv.id, extraction)
 
         db.session.commit()
@@ -218,7 +222,7 @@ def complete_conversation(conv_id: str):
             db.session.delete(conv.transcript)
             db.session.flush()
 
-        _save_transcript(conv.id, segments)
+        _save_transcript(conv.id, segments, language=language)
         _save_summary(conv.id, extraction)
 
         db.session.commit()
@@ -275,6 +279,111 @@ def delete_conversation(conv_id: str):
         return jsonify({"error": str(e)}), 500
 
     return jsonify({"message": "Conversation deleted"}), 200
+
+
+# ── Update summary (medical fields) ──────────────────────────────────────────
+
+@conversations_bp.route("/<string:conv_id>/summary", methods=["PATCH"])
+@require_auth
+def update_summary(conv_id: str):
+    """
+    Update (or create) the AI-extracted medical fields for a conversation.
+    Accepts any subset of the summary fields — only provided fields are updated.
+
+    Body (all optional):
+      patient_name, patient_age, patient_gender, disease,
+      education, emotional_state, additional_notes
+    """
+    conv = Conversation.query.get(conv_id)
+    if not conv:
+        return jsonify({"error": "Conversation not found"}), 404
+    if conv.user_id != g.user_id and g.user_role != "admin":
+        return jsonify({"error": "Access denied"}), 403
+
+    data = request.get_json() or {}
+    allowed = {
+        "patient_name", "patient_age", "patient_gender",
+        "disease", "education", "emotional_state", "additional_notes",
+    }
+
+    try:
+        summary = conv.summary
+        if not summary:
+            # No summary yet — create one so the user can add manual data
+            summary = Summary(conversation_id=conv_id)
+            db.session.add(summary)
+
+        for field in allowed:
+            if field in data:
+                setattr(summary, field, (data[field] or "").strip() or None)
+
+        db.session.commit()
+        return jsonify({"summary": summary.to_dict()}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+# ── Audio upload ─────────────────────────────────────────────────────────────
+
+@conversations_bp.route("/<string:conv_id>/audio", methods=["POST"])
+@optional_auth
+def upload_audio(conv_id: str):
+    """
+    Save an audio file for a completed conversation.
+    Stores the file on local disk and records metadata in AudioFile table.
+
+    Form fields:
+      file — audio blob (required), typically audio/webm
+    """
+    if not _db_available():
+        return jsonify({"error": "Database not configured"}), 503
+
+    conv = Conversation.query.get(conv_id)
+    if not conv:
+        return jsonify({"error": "Conversation not found"}), 404
+
+    user_id = getattr(g, "user_id", None)
+    if conv.user_id and user_id and conv.user_id != user_id and getattr(g, "user_role", "") != "admin":
+        return jsonify({"error": "Access denied"}), 403
+
+    if "file" not in request.files:
+        return jsonify({"error": "file field is required"}), 400
+
+    audio_file = request.files["file"]
+    raw_name   = secure_filename(audio_file.filename or "audio.webm")
+    ext        = os.path.splitext(raw_name)[1] or ".webm"
+
+    from config import Config
+    audio_dir = os.path.join(Config.SESSIONS_DIR, "audio")
+    os.makedirs(audio_dir, exist_ok=True)
+    file_path = os.path.join(audio_dir, f"{conv_id}{ext}")
+    audio_file.save(file_path)
+    size_mb = round(os.path.getsize(file_path) / (1024 * 1024), 3)
+
+    try:
+        # Replace existing audio record (idempotent re-upload)
+        if conv.audio_file:
+            db.session.delete(conv.audio_file)
+            db.session.flush()
+
+        af = AudioFile(
+            conversation_id=conv_id,
+            file_url=file_path,
+            storage_type="local",
+            format=ext.lstrip("."),
+            size_mb=size_mb,
+            duration_seconds=conv.duration,
+        )
+        db.session.add(af)
+        db.session.commit()
+        return jsonify({"success": True, "audio_file": af.to_dict()}), 201
+
+    except Exception as e:
+        db.session.rollback()
+        print(f"[conversations/audio] error: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 # ── Utility ──────────────────────────────────────────────────────────────────
