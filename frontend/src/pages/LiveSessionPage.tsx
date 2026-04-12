@@ -1,46 +1,68 @@
-import { Sidebar } from '../components/ui/Sidebar'
-import { Button } from '../components/ui/Button'
-import { Waveform } from '../components/visual/Waveform'
-import { Mic, Pause, Square, Languages, Flag, Star } from 'lucide-react'
 import { useState, useEffect, useRef } from 'react'
+import { Square, Clock, WifiOff, Download, Trash2, Save, CheckCircle2 } from 'lucide-react'
+import { Sidebar }       from '../components/ui/Sidebar'
+import { Badge }         from '../components/ui/Badge'
+import { Button }        from '../components/ui/Button'
+import { Card }          from '../components/ui/Card'
+import { Waveform }      from '../components/visual/Waveform'
+import { RecordButton }  from '../components/visual/RecordButton'
+import { SpeakerBubble } from '../components/visual/SpeakerBubble'
 import { useMediaRecorder } from '../hooks/useMediaRecorder'
-import axios from 'axios'
+import { useToast }         from '../components/ui/Toaster'
+import api from '../lib/api'
 
+// ── Constants ────────────────────────────────────────────────
 const CHUNK_INTERVAL_MS = 3000
-const DIARIZE_POLL_MS = 12000
-const apiBase = () => import.meta.env.VITE_API_URL || `http://${window.location.hostname}:5000`
+const DIARIZE_POLL_MS   = 12000
 
-type TranscriptSegment = { id: number; speaker: string; text: string; start?: number; end?: number }
+// ── Types ────────────────────────────────────────────────────
+type Segment = {
+  id:       number
+  speaker:  string
+  text:     string
+  start?:   number
+  end?:     number
+}
 
-async function sendChunkForTranscribe(blob: Blob, sessionId?: string | null): Promise<{ segments?: { speaker: string; text: string; start?: number; end?: number }[]; text?: string; error?: string; diarization_skipped?: string } | null> {
+type APIData = {
+  segments?: { speaker: string; text: string; start?: number; end?: number }[]
+  text?:     string
+  error?:    string
+  diarization_skipped?: string
+} | null
+
+// ── Helpers ──────────────────────────────────────────────────
+async function sendChunk(blob: Blob, sessionId?: string | null): Promise<APIData> {
   if (blob.size < 500) return null
   const form = new FormData()
   form.append('file', blob, 'speech.webm')
   form.append('translate', 'true')
-  form.append('diarize', 'true')
+  form.append('diarize',   'true')
   if (sessionId) form.append('session_id', sessionId)
-  const res = await axios.post(`${apiBase()}/api/transcribe`, form, { headers: { 'Content-Type': 'multipart/form-data' } })
+  const res = await api.post('/api/transcribe', form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
   return res.data
 }
 
 function appendSegments(
-  prev: TranscriptSegment[],
-  data: { segments?: { speaker: string; text: string; start?: number; end?: number }[]; text?: string; error?: string } | null,
-  idBase: number,
-  timeOffset: number = 0
-): TranscriptSegment[] {
+  prev:       Segment[],
+  data:       APIData,
+  idBase:     number,
+  timeOffset: number = 0,
+): Segment[] {
   if (!data) return prev
   if (data.segments?.length) {
-    const withText = data.segments.filter((s) => (s.text || '').trim())
-    if (!withText.length && data.error) return prev
+    const withText = data.segments.filter(s => (s.text || '').trim())
+    if (!withText.length) return prev
     return [
       ...prev,
       ...withText.map((s, i) => ({
-        id: idBase + i + Math.random(),
+        id:      idBase + i + Math.random(),
         speaker: s.speaker,
-        text: (s.text || '').trim(),
-        start: (s.start ?? 0) + timeOffset,
-        end: (s.end ?? 0) + timeOffset,
+        text:    (s.text || '').trim(),
+        start:   (s.start ?? 0) + timeOffset,
+        end:     (s.end   ?? 0) + timeOffset,
       })),
     ]
   }
@@ -50,23 +72,61 @@ function appendSegments(
   return prev
 }
 
+function formatTime(seconds: number): string {
+  const m = Math.floor(seconds / 60).toString().padStart(2, '0')
+  const s = Math.floor(seconds % 60).toString().padStart(2, '0')
+  return `${m}:${s}`
+}
+
+// ── Page ─────────────────────────────────────────────────────
 export default function LiveSessionPage() {
-  const [active, setActive] = useState(false)
-  const [paused, setPaused] = useState(false)
-  const [sessionId, setSessionId] = useState<string | null>(null)
-  const [transcripts, setTranscripts] = useState<TranscriptSegment[]>([])
-  const [processing, setProcessing] = useState(false)
-  const [diarizeError, setDiarizeError] = useState<string | null>(null)
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const [active,      setActive]      = useState(false)
+  const [paused,      setPaused]      = useState(false)
+  const [sessionId,   setSessionId]   = useState<string | null>(null)
+  const [segments,    setSegments]    = useState<Segment[]>([])
+  const [processing,  setProcessing]  = useState(false)
+  const [statusMsg,   setStatusMsg]   = useState<string | null>(null)
+  const [elapsed,     setElapsed]     = useState(0)
+  const [isSaving,    setIsSaving]    = useState(false)
+  const [savedId,     setSavedId]     = useState<string | null>(null)
+
+  const intervalRef        = useRef<ReturnType<typeof setInterval> | null>(null)
   const diarizeIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const transcriptsRef = useRef<TranscriptSegment[]>([])
-  transcriptsRef.current = transcripts
-  // Session-relative time: each chunk's segments are 0..3s; we add this so diarize sees full-session timestamps
-  const sessionTimeOffsetRef = useRef(0)
+  const timerRef           = useRef<ReturnType<typeof setInterval> | null>(null)
+  const segmentsRef        = useRef<Segment[]>([])
+  const timeOffsetRef      = useRef(0)
+  const bottomRef          = useRef<HTMLDivElement>(null)
+  // Keep session ID available after active is set to false (for save trigger)
+  const pendingSessionIdRef = useRef<string | null>(null)
+  const savedRef            = useRef(false)
+  const elapsedRef          = useRef(0)
 
-  const { recording, start, stop, reset, getBlob, chunks, permissionError, takeChunk } = useMediaRecorder({ mimeType: 'audio/webm' })
+  segmentsRef.current = segments
 
-  // Runtime: take a chunk immediately, then every CHUNK_INTERVAL_MS, and transcribe (session_id sends to session for full-session diarization)
+  const toast = useToast()
+
+  const { recording, start, stop, reset, getBlob, chunks, permissionError, takeChunk } =
+    useMediaRecorder({ mimeType: 'audio/webm' })
+
+  // Keep elapsedRef in sync for save
+  useEffect(() => { elapsedRef.current = elapsed }, [elapsed])
+
+  // Auto-scroll transcript
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [segments])
+
+  // Elapsed timer
+  useEffect(() => {
+    if (active && !paused) {
+      timerRef.current = setInterval(() => setElapsed(e => e + 1), 1000)
+    } else {
+      if (timerRef.current) clearInterval(timerRef.current)
+    }
+    return () => { if (timerRef.current) clearInterval(timerRef.current) }
+  }, [active, paused])
+
+  // Chunk → transcribe loop
   useEffect(() => {
     if (!active || paused || !recording) return
 
@@ -74,25 +134,24 @@ export default function LiveSessionPage() {
       const blob = await takeChunk()
       if (!blob) return
       setProcessing(true)
-      setDiarizeError(null)
+      setStatusMsg(null)
       try {
-        const data = await sendChunkForTranscribe(blob, sessionId)
-        if (data?.error) setDiarizeError(data.error)
-        else if (data?.diarization_skipped) setDiarizeError(data.diarization_skipped)
-        const offset = sessionId ? sessionTimeOffsetRef.current : 0
-        setTranscripts((prev) => {
+        const data = await sendChunk(blob, sessionId)
+        if (data?.error) setStatusMsg(data.error)
+        const offset = sessionId ? timeOffsetRef.current : 0
+        setSegments(prev => {
           const next = appendSegments(prev, data, Date.now(), offset)
           if (sessionId && data?.segments?.length) {
-            const added = next.slice(prev.length)
+            const added  = next.slice(prev.length)
             const maxEnd = added.reduce((m, s) => Math.max(m, s.end ?? 0), 0)
-            sessionTimeOffsetRef.current = maxEnd
+            timeOffsetRef.current = maxEnd
           }
           return next
         })
-      } catch (err: any) {
-        const msg = err?.response?.data?.error || err?.message || 'Transcription failed'
-        setDiarizeError(msg)
-        console.error('Transcription failed', err)
+      } catch (err: unknown) {
+        const msg = (err as { response?: { data?: { error?: string } }; message?: string })
+          ?.response?.data?.error ?? (err as { message?: string })?.message ?? 'Transcription failed'
+        setStatusMsg(msg)
       } finally {
         setProcessing(false)
       }
@@ -100,103 +159,123 @@ export default function LiveSessionPage() {
 
     processChunk()
     intervalRef.current = setInterval(processChunk, CHUNK_INTERVAL_MS)
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current)
-      intervalRef.current = null
-    }
+    return () => { if (intervalRef.current) clearInterval(intervalRef.current) }
   }, [active, paused, recording, sessionId])
 
-  // Session-level diarization: every DIARIZE_POLL_MS run pyannote on full session audio and update speaker labels
+  // Full-session diarization poll
   useEffect(() => {
     if (!active || !sessionId) return
     const pollDiarize = async () => {
-      const current = transcriptsRef.current
-      const segmentsWithTime = current.filter((t) => t.start != null && t.end != null).map((t) => ({ start: t.start!, end: t.end!, text: t.text }))
-      if (segmentsWithTime.length === 0) return
+      const current  = segmentsRef.current
+      const withTime = current.filter(t => t.start != null && t.end != null)
+        .map(t => ({ start: t.start!, end: t.end!, text: t.text }))
+      if (!withTime.length) return
       try {
-        const res = await axios.post(`${apiBase()}/api/session/diarize`, { session_id: sessionId, segments: segmentsWithTime })
+        const res     = await api.post('/api/session/diarize', { session_id: sessionId, segments: withTime })
         const labeled = res.data?.segments as { start: number; end: number; text: string; speaker: string }[] | undefined
-        const debug = res.data?.debug as { session_duration_sec?: number; num_tracks?: number; speaker_counts?: Record<string, number> } | undefined
-        if (debug) console.log('[session/diarize]', debug)
         if (!labeled?.length) return
-        setTranscripts((prev) => {
-          const withTime = prev.filter((t) => t.start != null && t.end != null)
-          if (withTime.length === 0) return prev
+        setSegments(prev => {
           let idx = 0
-          return prev.map((t) => {
+          return prev.map(t => {
             if (t.start == null || t.end == null) return t
             const speaker = labeled[idx]?.speaker ?? t.speaker
             idx++
             return { ...t, speaker }
           })
         })
-      } catch (e) {
-        console.error('Session diarize poll failed', e)
-      }
+      } catch { /* silent */ }
     }
     diarizeIntervalRef.current = setInterval(pollDiarize, DIARIZE_POLL_MS)
     pollDiarize()
-    return () => {
-      if (diarizeIntervalRef.current) clearInterval(diarizeIntervalRef.current)
-      diarizeIntervalRef.current = null
-    }
+    return () => { if (diarizeIntervalRef.current) clearInterval(diarizeIntervalRef.current) }
   }, [active, sessionId])
 
-  // Final chunk when user stops session
+  // Final chunk when recording stops
   useEffect(() => {
-    if (!recording && chunks.length > 0) {
-      const processAudio = async () => {
-        setProcessing(true)
-        const blob = getBlob('audio/webm')
-        if (blob && blob.size >= 500) {
-          try {
-            const data = await sendChunkForTranscribe(blob, sessionId)
-            if (data?.error) setDiarizeError(data.error)
-            const offset = sessionId ? sessionTimeOffsetRef.current : 0
-            setTranscripts((prev) => {
-              const next = appendSegments(prev, data, Date.now(), offset)
-              if (sessionId && data?.segments?.length) {
-                const added = next.slice(prev.length)
-                const maxEnd = added.reduce((m, s) => Math.max(m, s.end ?? 0), 0)
-                sessionTimeOffsetRef.current = maxEnd
-              }
-              return next
-            })
-          } catch (err) {
-            console.error('Final chunk transcription failed', err)
-          }
-        }
-        setProcessing(false)
+    if (recording || !chunks.length) return
+    const processAudio = async () => {
+      setProcessing(true)
+      const blob = getBlob('audio/webm')
+      if (blob && blob.size >= 500) {
+        try {
+          const data   = await sendChunk(blob, pendingSessionIdRef.current)
+          const offset = pendingSessionIdRef.current ? timeOffsetRef.current : 0
+          setSegments(prev => appendSegments(prev, data, Date.now(), offset))
+        } catch { /* silent */ }
       }
-      processAudio()
+      setProcessing(false)
     }
-  }, [recording, chunks, sessionId])
+    processAudio()
+  }, [recording, chunks])
 
+  // ── Auto-save after session ends and final chunk is processed ────────────
+  useEffect(() => {
+    const pendingId = pendingSessionIdRef.current
+    if (
+      !active           &&   // session ended
+      !recording        &&   // recorder stopped
+      !processing       &&   // final chunk done
+      segments.length > 0 && // have something to save
+      pendingId         &&   // have a session to save to
+      !savedRef.current      // not already saved
+    ) {
+      savedRef.current = true
+      saveSession(pendingId)
+    }
+  }, [active, recording, processing, segments])
+
+  async function saveSession(convId: string) {
+    setIsSaving(true)
+    try {
+      const payload = {
+        segments: segments.map(s => ({
+          speaker: s.speaker,
+          text:    s.text,
+          start:   s.start,
+          end:     s.end,
+        })),
+        extraction: null,          // live session has no extraction
+        duration:   elapsedRef.current,
+        language:   'Unknown',
+      }
+      const res = await api.post(`/api/conversations/${convId}/complete`, payload)
+      setSavedId(res.data.conversation?.id ?? convId)
+      toast('Session saved to your history', 'success')
+    } catch {
+      toast('Could not save session — transcript is still visible above', 'error')
+    } finally {
+      setIsSaving(false)
+      pendingSessionIdRef.current = null
+    }
+  }
+
+  // ── Actions ──────────────────────────────────────────────────
   const toggle = async () => {
     if (!active) {
-      // Start Session: create server-side session for full-audio diarization
+      savedRef.current = false
+      setSavedId(null)
       try {
-        const res = await axios.post(`${apiBase()}/api/session/start`)
-        setSessionId(res.data?.session_id ?? null)
-        sessionTimeOffsetRef.current = 0
-      } catch (e) {
-        console.error('Session start failed', e)
-      }
+        const res = await api.post('/api/session/start')
+        const id  = res.data?.session_id ?? null
+        setSessionId(id)
+        pendingSessionIdRef.current = id
+        timeOffsetRef.current = 0
+        setElapsed(0)
+      } catch { /* still works without session_id */ }
       setActive(true)
       setPaused(false)
       reset()
       start()
-    }
-    else if (!paused) {
-      // Pause Session (Stop recording to transcribe current chunk)
+      toast('Session started — recording', 'success')
+    } else if (!paused) {
       setPaused(true)
       stop()
-    }
-    else {
-      // Resume Session
+      toast('Recording paused', 'info')
+    } else {
       setPaused(false)
       reset()
       start()
+      toast('Recording resumed', 'info')
     }
   }
 
@@ -204,98 +283,220 @@ export default function LiveSessionPage() {
     setActive(false)
     setPaused(false)
     setSessionId(null)
+    // pendingSessionIdRef keeps the ID for the save trigger
     stop()
+    toast('Session ended — saving…', 'info')
   }
 
+  const handleClear = () => {
+    setSegments([])
+    setStatusMsg(null)
+    setElapsed(0)
+    setSavedId(null)
+    savedRef.current = false
+    pendingSessionIdRef.current = null
+  }
+
+  const handleExport = () => {
+    const text = segments.map(s => `[${s.speaker}] ${s.text}`).join('\n')
+    const blob  = new Blob([text], { type: 'text/plain' })
+    const url   = URL.createObjectURL(blob)
+    const a     = document.createElement('a')
+    a.href      = url
+    a.download  = `transcript-${Date.now()}.txt`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  // ── Derived state ────────────────────────────────────────────
+  const recordState = processing && !active
+    ? 'processing'
+    : active && !paused
+    ? 'recording'
+    : active && paused
+    ? 'paused'
+    : 'idle'
+
+  const speakerSet = [...new Set(segments.map(s => s.speaker))]
+
   return (
-    <div className="min-h-screen flex">
+    <div className="min-h-screen flex bg-surface-400">
       <Sidebar />
-      <main className="flex-1 p-6">
-        <div className="max-w-7xl mx-auto grid lg:grid-cols-3 gap-6">
-          <section className="lg:col-span-2">
-            <div className="p-6 rounded-3xl border border-slate-200 dark:border-slate-800 bg-white/70 dark:bg-slate-900/50 shadow-soft">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h1 className="text-xl font-semibold">Two-Person Live Session</h1>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">One mic · Any language → English · Offline</p>
-                </div>
-                <div className="flex gap-2">
-                  <Button variant="secondary"><Languages size={16} className="mr-2" /> Translate</Button>
-                  <Button variant="secondary"><Flag size={16} className="mr-2" /> Mark</Button>
-                </div>
-              </div>
 
-              <div className="mt-6 flex flex-col items-center">
-                <div className={`h-24 w-24 rounded-full flex items-center justify-center shadow-soft ${active && !paused ? 'bg-brand-600 text-white ring-4 ring-brand-400/40 animate-pulse' : 'bg-white dark:bg-slate-800'}`}>
-                  {!active ? <Mic /> : paused ? <Pause /> : <Mic />}
-                </div>
-                <div className="mt-3 flex gap-3">
-                  <Button onClick={toggle} glow>{!active ? 'Start' : paused ? 'Resume' : 'Pause'}</Button>
-                  <Button variant="secondary" onClick={handleStop}><Square className="mr-2" size={14} /> Stop</Button>
-                </div>
-                {permissionError && <div className="text-red-500 text-xs mt-2">{permissionError}</div>}
-                {diarizeError && <div className="text-amber-600 dark:text-amber-400 text-xs mt-2">{diarizeError}</div>}
-              </div>
+      <main className="flex-1 overflow-hidden flex flex-col">
 
-              <div className="mt-8">
-                <Waveform active={active && !paused} />
-              </div>
+        {/* ── Top bar ──────────────────────────────────────── */}
+        <header className="shrink-0 border-b border-white/8 px-6 py-4 flex items-center justify-between">
+          <div>
+            <h1 className="font-display font-bold text-lg text-white">Live Session</h1>
+            <p className="text-xs text-slate-500 mt-0.5">One mic · Any language → English · Fully offline</p>
+          </div>
 
-              <div className="mt-8 space-y-3 relative min-h-[200px]">
-                {transcripts.length === 0 && (
-                  <div className="text-slate-400 text-sm text-center py-10">
-                    {active && !paused ? 'Listening… transcription every 15s (any language → English)' : 'Ready — start for two-person conversation'}
+          <div className="flex items-center gap-3">
+            {active && !paused && <Badge variant="success" dot>Recording</Badge>}
+            {active && paused  && <Badge variant="warning" dot>Paused</Badge>}
+            {isSaving          && <Badge variant="processing" dot>Saving…</Badge>}
+            {savedId && !isSaving && (
+              <Badge variant="success">
+                <CheckCircle2 size={11} className="mr-1" /> Saved
+              </Badge>
+            )}
+            {!active && !savedId && segments.length > 0 && (
+              <Badge variant="default">Session ended</Badge>
+            )}
+
+            {active && (
+              <div className="flex items-center gap-1.5 text-sm text-slate-400">
+                <Clock size={13} />
+                {formatTime(elapsed)}
+              </div>
+            )}
+
+            <div className="flex items-center gap-1.5 text-xs text-emerald-400">
+              <WifiOff size={12} />
+              Offline
+            </div>
+          </div>
+        </header>
+
+        {/* ── Body ─────────────────────────────────────────── */}
+        <div className="flex-1 overflow-hidden flex gap-0 lg:gap-6 p-6">
+
+          {/* ── Left: controls + transcript ──────────────── */}
+          <div className="flex-1 flex flex-col gap-4 min-w-0">
+
+            {/* Controls */}
+            <Card variant="elevated" className="p-6">
+              <div className="flex flex-col items-center gap-6">
+                <RecordButton state={recordState} onClick={toggle} size="lg" />
+                <div className="w-full"><Waveform active={active && !paused} /></div>
+
+                {active && (
+                  <Button variant="destructive" size="sm" onClick={handleStop}>
+                    <Square size={13} className="mr-1.5 fill-current" />
+                    End Session
+                  </Button>
+                )}
+
+                {permissionError && (
+                  <p className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2.5 w-full text-center">
+                    {permissionError}
+                  </p>
+                )}
+                {statusMsg && (
+                  <p className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-2 w-full text-center">
+                    {statusMsg}
+                  </p>
+                )}
+              </div>
+            </Card>
+
+            {/* Transcript */}
+            <Card variant="elevated" className="flex-1 flex flex-col min-h-0">
+              <div className="shrink-0 flex items-center justify-between px-5 py-4 border-b border-white/8">
+                <div className="flex items-center gap-3">
+                  <h2 className="font-semibold text-white text-sm">Transcript</h2>
+                  {processing && <Badge variant="default" dot>Processing</Badge>}
+                  {isSaving   && <Badge variant="processing" dot>Saving…</Badge>}
+                </div>
+
+                {speakerSet.length > 0 && (
+                  <div className="flex items-center gap-3">
+                    {speakerSet.map(sp => (
+                      <div key={sp} className="flex items-center gap-1.5">
+                        <div className={`h-2 w-2 rounded-full ${sp.includes('2') ? 'bg-emerald-400' : 'bg-brand-400'}`} />
+                        <span className="text-xs text-slate-500">{sp}</span>
+                      </div>
+                    ))}
                   </div>
                 )}
-                <div className="space-y-2">
-                  {transcripts.map((t) => (
-                    <div
-                      key={t.id}
-                      className={`flex gap-2 items-start text-sm rounded-xl px-3 py-2 ${
-                        t.speaker === 'Speaker 1'
-                          ? 'bg-brand-50 dark:bg-brand-950/30 border-l-4 border-brand-500'
-                          : 'bg-slate-100 dark:bg-slate-800/50 border-l-4 border-slate-400 dark:border-slate-500'
-                      }`}
-                    >
-                      <span className={`font-semibold shrink-0 ${t.speaker === 'Speaker 1' ? 'text-brand-700 dark:text-brand-400' : 'text-slate-600 dark:text-slate-400'}`}>
-                        {t.speaker}:
-                      </span>
-                      <span className="text-slate-700 dark:text-slate-300">{t.text}</span>
-                    </div>
-                  ))}
-                </div>
-                {processing && (
-                  <div className="text-sm text-slate-400 italic">Processing audio...</div>
-                )}
 
+                {segments.length > 0 && !active && (
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={handleExport}
+                      className="p-1.5 rounded-lg text-slate-500 hover:text-brand-400 hover:bg-brand-500/10 transition-colors"
+                      title="Export transcript"
+                    >
+                      <Download size={14} />
+                    </button>
+                    <button
+                      onClick={handleClear}
+                      className="p-1.5 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                      title="Clear"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                )}
               </div>
-            </div>
-          </section>
-          <aside>
-            <div className="p-6 rounded-3xl border border-slate-200 dark:border-slate-800 bg-white/70 dark:bg-slate-900/50 shadow-soft">
-              <div className="flex items-center justify-between">
-                <h2 className="font-semibold">Summary</h2>
-                <Star size={16} className="text-brand-500" />
+
+              <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
+                {segments.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center h-full text-center py-16">
+                    <p className="text-slate-400 text-sm">
+                      {active && !paused
+                        ? 'Listening… transcription appears every few seconds'
+                        : 'Start a session to begin transcribing'}
+                    </p>
+                  </div>
+                ) : (
+                  segments.map(seg => (
+                    <SpeakerBubble
+                      key={seg.id}
+                      speaker={seg.speaker}
+                      text={seg.text}
+                      timestamp={seg.start != null ? formatTime(seg.start) : undefined}
+                    />
+                  ))
+                )}
+                <div ref={bottomRef} />
               </div>
-              <p className="text-sm text-slate-600 dark:text-slate-300 mt-2">Essence Summary: Real-time insights will appear here as the conversation unfolds.</p>
-              <div className="mt-4">
-                <div className="font-medium">Decisions</div>
-                <ul className="list-disc pl-5 text-sm text-slate-600 dark:text-slate-300">
-                  <li>—</li>
-                </ul>
+            </Card>
+          </div>
+
+          {/* ── Right: session info ───────────────────────── */}
+          <div className="hidden lg:flex flex-col gap-4 w-64 shrink-0">
+            <Card variant="elevated" className="p-5 space-y-4">
+              <h3 className="text-sm font-semibold text-white">Session Info</h3>
+              <div className="space-y-3">
+                {[
+                  { label: 'Duration',  value: formatTime(elapsed) },
+                  { label: 'Segments',  value: segments.length.toString() },
+                  { label: 'Speakers',  value: speakerSet.length ? speakerSet.length.toString() : '—' },
+                  { label: 'Saved',     value: savedId ? 'Yes ✓' : isSaving ? 'Saving…' : '—' },
+                ].map(item => (
+                  <div key={item.label} className="flex items-center justify-between">
+                    <span className="text-xs text-slate-500">{item.label}</span>
+                    <span className="text-xs font-medium text-slate-300">{item.value}</span>
+                  </div>
+                ))}
               </div>
-              <div className="mt-4">
-                <div className="font-medium">Action Items</div>
-                <ul className="list-disc pl-5 text-sm text-slate-600 dark:text-slate-300">
-                  <li>—</li>
-                </ul>
-              </div>
-            </div>
-          </aside>
+            </Card>
+
+            <Card variant="flat" className="p-4">
+              <h3 className="text-xs font-semibold text-slate-400 mb-3 uppercase tracking-wide">Tips</h3>
+              <ul className="space-y-2 text-xs text-slate-500">
+                <li>· Place the mic between both speakers</li>
+                <li>· Speak clearly with short pauses</li>
+                <li>· Transcription runs every 3 seconds</li>
+                <li>· Session auto-saves when you end</li>
+                <li>· Export available after session ends</li>
+              </ul>
+            </Card>
+
+            {segments.length > 0 && (
+              <Card variant="flat" className="p-4">
+                <h3 className="text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wide">Word Count</h3>
+                <p className="text-2xl font-bold text-white">
+                  {segments.reduce((n, s) => n + s.text.split(/\s+/).length, 0)}
+                </p>
+                <p className="text-xs text-slate-500 mt-1">words transcribed</p>
+              </Card>
+            )}
+          </div>
         </div>
       </main>
     </div>
   )
 }
-
-
