@@ -147,8 +147,18 @@ export default function ASRPage() {
           duration,
           language:   detectedLang.current,
         })
-        setSavedId(res.data.conversation_id)
+        const convId = res.data.conversation_id as string
+        setSavedId(convId)
         toast('Session saved to history', 'success')
+
+        // Upload audio file in background (non-blocking)
+        if (convId && blob && blob.size >= 500) {
+          const form = new FormData()
+          form.append('file', blob, 'recording.webm')
+          api.post(`/api/conversations/${convId}/audio`, form, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+          }).catch(() => { /* audio upload failure is non-fatal */ })
+        }
       } catch {
         toast('Could not save session to history', 'error')
       } finally {
@@ -256,7 +266,7 @@ export default function ASRPage() {
                   {isSaving     && <Badge variant="processing" dot>Saving…</Badge>}
                   {savedId && !isSaving && (
                     <a
-                      href={`/app/sessions/${savedId}`}
+                      href={`/session/${savedId}`}
                       className="flex items-center gap-1.5 text-xs text-brand-400 hover:text-brand-300 transition-colors"
                     >
                       <Save size={11} />

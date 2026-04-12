@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
-import { Mic, Mail, Lock, ShieldCheck, Zap, WifiOff } from 'lucide-react'
+import { Mic, Mail, Lock, ShieldCheck, Zap, WifiOff, X, KeyRound } from 'lucide-react'
 import { Button } from '../components/ui/Button'
-import { Input } from '../components/ui/Input'
-import { login, isAdmin } from '../hooks/useAuth'
+import { Input }  from '../components/ui/Input'
+import { login }  from '../hooks/useAuth'
+import api        from '../lib/api'
 
 const perks = [
   { icon: WifiOff,     text: 'Fully offline — no data leaves your machine' },
@@ -11,12 +12,122 @@ const perks = [
   { icon: Zap,         text: 'Real-time speaker diarization + AI extraction' },
 ]
 
+// ── Forgot-password modal ─────────────────────────────────────
+function ForgotPasswordModal({ onClose }: { onClose: () => void }) {
+  const [email,       setEmail]       = useState('')
+  const [newPass,     setNewPass]     = useState('')
+  const [confirmPass, setConfirmPass] = useState('')
+  const [loading,     setLoading]     = useState(false)
+  const [done,        setDone]        = useState(false)
+  const [error,       setError]       = useState('')
+
+  async function handleReset(e: React.FormEvent) {
+    e.preventDefault()
+    setError('')
+    if (!email.trim())           return setError('Email is required.')
+    if (newPass.length < 6)      return setError('Password must be at least 6 characters.')
+    if (newPass !== confirmPass)  return setError('Passwords do not match.')
+
+    setLoading(true)
+    try {
+      await api.post('/api/auth/reset-password', {
+        email:        email.trim().toLowerCase(),
+        new_password: newPass,
+      })
+      setDone(true)
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
+        ?? 'Reset failed. Please try again.'
+      setError(msg)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+      <div className="w-full max-w-sm bg-surface-100 border border-white/10 rounded-2xl shadow-2xl p-6">
+
+        <div className="flex items-center justify-between mb-5">
+          <div className="flex items-center gap-2">
+            <KeyRound size={16} className="text-brand-400" />
+            <h2 className="font-display font-bold text-white">Reset Password</h2>
+          </div>
+          <button onClick={onClose} className="text-slate-500 hover:text-slate-300 transition-colors">
+            <X size={18} />
+          </button>
+        </div>
+
+        {done ? (
+          <div className="text-center py-4 space-y-3">
+            <div className="h-12 w-12 rounded-full bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center mx-auto">
+              <ShieldCheck size={22} className="text-emerald-400" />
+            </div>
+            <p className="text-sm text-slate-300">
+              If that email is registered, the password has been updated.
+            </p>
+            <p className="text-xs text-slate-500">You can now sign in with your new password.</p>
+            <Button className="w-full mt-2" onClick={onClose}>Back to sign in</Button>
+          </div>
+        ) : (
+          <form onSubmit={handleReset} className="space-y-4">
+            <p className="text-xs text-slate-400 mb-1">
+              Enter your registered email and choose a new password.
+              No email is sent — this is an offline system.
+            </p>
+
+            <Input
+              label="Email address"
+              type="email"
+              placeholder="doctor@hospital.com"
+              value={email}
+              onChange={e => setEmail(e.target.value)}
+              icon={<Mail size={14} />}
+              autoComplete="email"
+            />
+            <Input
+              label="New password"
+              type="password"
+              placeholder="Min. 6 characters"
+              value={newPass}
+              onChange={e => setNewPass(e.target.value)}
+              icon={<Lock size={14} />}
+              autoComplete="new-password"
+            />
+            <Input
+              label="Confirm new password"
+              type="password"
+              placeholder="Repeat password"
+              value={confirmPass}
+              onChange={e => setConfirmPass(e.target.value)}
+              icon={<Lock size={14} />}
+              autoComplete="new-password"
+            />
+
+            {error && (
+              <p className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2.5">
+                {error}
+              </p>
+            )}
+
+            <Button type="submit" className="w-full" loading={loading} glow>
+              {loading ? 'Resetting…' : 'Reset password'}
+            </Button>
+          </form>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── Login page ────────────────────────────────────────────────
 export default function LoginPage() {
   const navigate = useNavigate()
-  const [email,    setEmail]    = useState('')
-  const [password, setPassword] = useState('')
-  const [error,    setError]    = useState('')
-  const [loading,  setLoading]  = useState(false)
+  const [email,         setEmail]         = useState('')
+  const [password,      setPassword]      = useState('')
+  const [error,         setError]         = useState('')
+  const [loading,       setLoading]       = useState(false)
+  const [showForgot,    setShowForgot]    = useState(false)
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -43,6 +154,8 @@ export default function LoginPage() {
   }
 
   return (
+    <>
+    {showForgot && <ForgotPasswordModal onClose={() => setShowForgot(false)} />}
     <div className="min-h-screen flex">
 
       {/* ── Left brand panel ───────────────────────────────── */}
@@ -138,7 +251,13 @@ export default function LoginPage() {
                 <input type="checkbox" className="h-4 w-4 rounded accent-brand-500" />
                 Remember me
               </label>
-              <span className="text-slate-600 cursor-default">Forgot password?</span>
+              <button
+                type="button"
+                onClick={() => setShowForgot(true)}
+                className="text-brand-400 hover:text-brand-300 transition-colors"
+              >
+                Forgot password?
+              </button>
             </div>
 
             <Button type="submit" className="w-full" size="lg" glow loading={loading}>
@@ -164,5 +283,6 @@ export default function LoginPage() {
         </div>
       </div>
     </div>
+    </>
   )
 }

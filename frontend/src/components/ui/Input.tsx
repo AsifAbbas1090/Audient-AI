@@ -33,7 +33,7 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
               'text-slate-100 placeholder:text-slate-500',
               'focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent',
               'theme-transition',
-              icon && 'pl-10',
+              !!icon && 'pl-10',
               !icon && 'px-4',
               error && 'border-red-500/50 focus:ring-red-500',
               // light mode

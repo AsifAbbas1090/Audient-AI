@@ -12,8 +12,8 @@ import { useToast }         from '../components/ui/Toaster'
 import api from '../lib/api'
 
 // ── Constants ────────────────────────────────────────────────
-const CHUNK_INTERVAL_MS = 3000
-const DIARIZE_POLL_MS   = 12000
+const CHUNK_INTERVAL_MS  = 3000
+const DIARIZE_POLL_MS    = 8000   // re-label speakers every 8 s
 
 // ── Types ────────────────────────────────────────────────────
 type Segment = {
@@ -27,6 +27,7 @@ type Segment = {
 type APIData = {
   segments?: { speaker: string; text: string; start?: number; end?: number }[]
   text?:     string
+  language?: string
   error?:    string
   diarization_skipped?: string
 } | null
@@ -91,7 +92,6 @@ export default function LiveSessionPage() {
   const [savedId,     setSavedId]     = useState<string | null>(null)
 
   const intervalRef        = useRef<ReturnType<typeof setInterval> | null>(null)
-  const diarizeIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const timerRef           = useRef<ReturnType<typeof setInterval> | null>(null)
   const segmentsRef        = useRef<Segment[]>([])
   const timeOffsetRef      = useRef(0)
@@ -100,6 +100,10 @@ export default function LiveSessionPage() {
   const pendingSessionIdRef = useRef<string | null>(null)
   const savedRef            = useRef(false)
   const elapsedRef          = useRef(0)
+  // Detected language from Whisper (captured from first chunk that returns one)
+  const detectedLangRef     = useRef<string>('Unknown')
+  // Final audio blob captured when recording stops — uploaded after DB save
+  const audioBlobRef        = useRef<Blob | null>(null)
 
   segmentsRef.current = segments
 
@@ -138,6 +142,10 @@ export default function LiveSessionPage() {
       try {
         const data = await sendChunk(blob, sessionId)
         if (data?.error) setStatusMsg(data.error)
+        // Capture detected language from first chunk that returns one
+        if (data?.language && data.language !== 'Unknown' && detectedLangRef.current === 'Unknown') {
+          detectedLangRef.current = data.language
+        }
         const offset = sessionId ? timeOffsetRef.current : 0
         setSegments(prev => {
           const next = appendSegments(prev, data, Date.now(), offset)
@@ -162,16 +170,21 @@ export default function LiveSessionPage() {
     return () => { if (intervalRef.current) clearInterval(intervalRef.current) }
   }, [active, paused, recording, sessionId])
 
-  // Full-session diarization poll
+  // Full-session diarization — runs every 8 s AND whenever segments change
+  // (so the first batch of text gets labeled immediately, not after 8 s)
+  const diarizeRunningRef = useRef(false)
   useEffect(() => {
-    if (!active || !sessionId) return
-    const pollDiarize = async () => {
-      const current  = segmentsRef.current
-      const withTime = current.filter(t => t.start != null && t.end != null)
-        .map(t => ({ start: t.start!, end: t.end!, text: t.text }))
-      if (!withTime.length) return
-      try {
-        const res     = await api.post('/api/session/diarize', { session_id: sessionId, segments: withTime })
+    if (!active || !sessionId || !segments.length) return
+    // Debounce: skip if a diarize call is already in-flight
+    if (diarizeRunningRef.current) return
+
+    const withTime = segments.filter(t => t.start != null && t.end != null)
+      .map(t => ({ start: t.start!, end: t.end!, text: t.text }))
+    if (!withTime.length) return
+
+    diarizeRunningRef.current = true
+    api.post('/api/session/diarize', { session_id: sessionId, segments: withTime })
+      .then(res => {
         const labeled = res.data?.segments as { start: number; end: number; text: string; speaker: string }[] | undefined
         if (!labeled?.length) return
         setSegments(prev => {
@@ -183,12 +196,10 @@ export default function LiveSessionPage() {
             return { ...t, speaker }
           })
         })
-      } catch { /* silent */ }
-    }
-    diarizeIntervalRef.current = setInterval(pollDiarize, DIARIZE_POLL_MS)
-    pollDiarize()
-    return () => { if (diarizeIntervalRef.current) clearInterval(diarizeIntervalRef.current) }
-  }, [active, sessionId])
+      })
+      .catch(() => { /* silent */ })
+      .finally(() => { diarizeRunningRef.current = false })
+  }, [segments, active, sessionId])
 
   // Final chunk when recording stops
   useEffect(() => {
@@ -196,9 +207,14 @@ export default function LiveSessionPage() {
     const processAudio = async () => {
       setProcessing(true)
       const blob = getBlob('audio/webm')
+      // Store full blob for audio upload after save
       if (blob && blob.size >= 500) {
+        audioBlobRef.current = blob
         try {
           const data   = await sendChunk(blob, pendingSessionIdRef.current)
+          if (data?.language && data.language !== 'Unknown' && detectedLangRef.current === 'Unknown') {
+            detectedLangRef.current = data.language
+          }
           const offset = pendingSessionIdRef.current ? timeOffsetRef.current : 0
           setSegments(prev => appendSegments(prev, data, Date.now(), offset))
         } catch { /* silent */ }
@@ -228,31 +244,45 @@ export default function LiveSessionPage() {
     setIsSaving(true)
     try {
       const payload = {
-        segments: segments.map(s => ({
+        segments: segmentsRef.current.map(s => ({
           speaker: s.speaker,
           text:    s.text,
           start:   s.start,
           end:     s.end,
         })),
-        extraction: null,          // live session has no extraction
+        extraction: null,
         duration:   elapsedRef.current,
-        language:   'Unknown',
+        language:   detectedLangRef.current,
       }
       const res = await api.post(`/api/conversations/${convId}/complete`, payload)
-      setSavedId(res.data.conversation?.id ?? convId)
+      const savedConvId = res.data.conversation?.id ?? convId
+      setSavedId(savedConvId)
       toast('Session saved to your history', 'success')
+
+      // Upload audio file in background (non-blocking)
+      const audioBlob = audioBlobRef.current
+      if (audioBlob && audioBlob.size >= 500) {
+        const form = new FormData()
+        form.append('file', audioBlob, 'session.webm')
+        api.post(`/api/conversations/${savedConvId}/audio`, form, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        }).catch(() => { /* audio upload failure is non-fatal */ })
+      }
     } catch {
       toast('Could not save session — transcript is still visible above', 'error')
     } finally {
       setIsSaving(false)
       pendingSessionIdRef.current = null
+      audioBlobRef.current        = null
     }
   }
 
   // ── Actions ──────────────────────────────────────────────────
   const toggle = async () => {
     if (!active) {
-      savedRef.current = false
+      savedRef.current      = false
+      detectedLangRef.current = 'Unknown'
+      audioBlobRef.current  = null
       setSavedId(null)
       try {
         const res = await api.post('/api/session/start')

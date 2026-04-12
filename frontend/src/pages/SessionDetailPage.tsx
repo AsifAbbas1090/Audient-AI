@@ -1,15 +1,17 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, Download, Clock, Globe, CheckCircle2,
   AlertCircle, Loader2, FileText, Brain, User,
   Calendar, HeartPulse, BookOpen, Smile, StickyNote,
+  Pencil, X, Check, Plus,
 } from 'lucide-react'
 import { Sidebar }       from '../components/ui/Sidebar'
 import { Button }        from '../components/ui/Button'
 import { Badge }         from '../components/ui/Badge'
 import { Card }          from '../components/ui/Card'
 import { SpeakerBubble } from '../components/visual/SpeakerBubble'
+import { useToast }      from '../components/ui/Toaster'
 import api from '../lib/api'
 
 // ── Types ────────────────────────────────────────────────────
@@ -79,10 +81,24 @@ const statusConfig = {
 export default function SessionDetailPage() {
   const { id }   = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const toast    = useToast()
 
-  const [conv,    setConv]    = useState<Conversation | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error,   setError]   = useState<string | null>(null)
+  const [conv,          setConv]          = useState<Conversation | null>(null)
+  const [loading,       setLoading]       = useState(true)
+  const [error,         setError]         = useState<string | null>(null)
+  const [editingTitle,  setEditingTitle]  = useState(false)
+  const [titleDraft,    setTitleDraft]    = useState('')
+  const [savingTitle,   setSavingTitle]   = useState(false)
+  const titleInputRef = useRef<HTMLInputElement>(null)
+
+  // Summary editing
+  const [editingSummary, setEditingSummary] = useState(false)
+  const [summaryDraft,   setSummaryDraft]   = useState<Summary>({
+    patient_name: null, patient_age: null, patient_gender: null,
+    disease: null, education: null, emotional_state: null,
+    additional_notes: null, summary_text: null,
+  })
+  const [savingSummary, setSavingSummary] = useState(false)
 
   useEffect(() => {
     if (!id) return
@@ -98,6 +114,71 @@ export default function SessionDetailPage() {
       })
       .finally(() => setLoading(false))
   }, [id])
+
+  // Focus input when entering edit mode
+  useEffect(() => {
+    if (editingTitle) titleInputRef.current?.focus()
+  }, [editingTitle])
+
+  function startEditTitle() {
+    setTitleDraft(conv?.title || '')
+    setEditingTitle(true)
+  }
+
+  async function saveTitle() {
+    if (!conv || !titleDraft.trim()) { setEditingTitle(false); return }
+    setSavingTitle(true)
+    try {
+      await api.patch(`/api/conversations/${conv.id}`, { title: titleDraft.trim() })
+      setConv(prev => prev ? { ...prev, title: titleDraft.trim() } : prev)
+      toast('Title updated', 'success')
+    } catch {
+      toast('Could not update title', 'error')
+    } finally {
+      setSavingTitle(false)
+      setEditingTitle(false)
+    }
+  }
+
+  function cancelEditTitle() {
+    setEditingTitle(false)
+    setTitleDraft('')
+  }
+
+  // ── Summary editing ───────────────────────────────────────
+  function startEditSummary() {
+    const s = conv?.summary
+    setSummaryDraft({
+      patient_name:     s?.patient_name     ?? null,
+      patient_age:      s?.patient_age      ?? null,
+      patient_gender:   s?.patient_gender   ?? null,
+      disease:          s?.disease          ?? null,
+      education:        s?.education        ?? null,
+      emotional_state:  s?.emotional_state  ?? null,
+      additional_notes: s?.additional_notes ?? null,
+      summary_text:     s?.summary_text     ?? null,
+    })
+    setEditingSummary(true)
+  }
+
+  async function saveSummary() {
+    if (!conv) return
+    setSavingSummary(true)
+    try {
+      const res = await api.patch(`/api/conversations/${conv.id}/summary`, summaryDraft)
+      setConv(prev => prev ? { ...prev, summary: res.data.summary } : prev)
+      setEditingSummary(false)
+      toast('Medical data updated', 'success')
+    } catch {
+      toast('Could not save changes', 'error')
+    } finally {
+      setSavingSummary(false)
+    }
+  }
+
+  function cancelEditSummary() {
+    setEditingSummary(false)
+  }
 
   // ── Export ────────────────────────────────────────────────
   const handleExport = () => {
@@ -209,9 +290,36 @@ export default function SessionDetailPage() {
               <ArrowLeft size={18} />
             </button>
             <div className="min-w-0">
-              <h1 className="font-display font-bold text-lg text-white truncate">
-                {conv.title || 'Untitled session'}
-              </h1>
+              {editingTitle ? (
+                <div className="flex items-center gap-2">
+                  <input
+                    ref={titleInputRef}
+                    value={titleDraft}
+                    onChange={e => setTitleDraft(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') saveTitle(); if (e.key === 'Escape') cancelEditTitle() }}
+                    className="font-display font-bold text-lg text-white bg-white/8 border border-brand-500/50 rounded-lg px-3 py-1 focus:outline-none focus:ring-2 focus:ring-brand-500 w-64"
+                  />
+                  <button onClick={saveTitle} disabled={savingTitle} className="text-emerald-400 hover:text-emerald-300 disabled:opacity-50">
+                    {savingTitle ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
+                  </button>
+                  <button onClick={cancelEditTitle} className="text-slate-500 hover:text-slate-300">
+                    <X size={16} />
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 group">
+                  <h1 className="font-display font-bold text-lg text-white truncate">
+                    {conv.title || 'Untitled session'}
+                  </h1>
+                  <button
+                    onClick={startEditTitle}
+                    className="p-1 rounded-lg text-slate-600 hover:text-slate-300 hover:bg-white/8 opacity-0 group-hover:opacity-100 transition-all"
+                    title="Edit title"
+                  >
+                    <Pencil size={13} />
+                  </button>
+                </div>
+              )}
               <p className="text-xs text-slate-500 mt-0.5">{formatDate(conv.created_at)}</p>
             </div>
           </div>
@@ -307,14 +415,81 @@ export default function SessionDetailPage() {
                 </Card>
               )}
 
-              {/* Extracted medical fields */}
-              {hasSummary && (
-                <Card variant="elevated" className="p-5">
-                  <h2 className="font-semibold text-white text-sm mb-4 flex items-center gap-2">
+              {/* Extracted medical fields — view or edit */}
+              <Card variant="elevated" className="p-5">
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="font-semibold text-white text-sm flex items-center gap-2">
                     <Brain size={14} className="text-brand-400" />
                     Medical Extraction
                   </h2>
+                  {editingSummary ? (
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={saveSummary}
+                        disabled={savingSummary}
+                        className="flex items-center gap-1.5 text-xs text-emerald-400 hover:text-emerald-300 disabled:opacity-50 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-2.5 py-1 transition-colors"
+                      >
+                        {savingSummary ? <Loader2 size={11} className="animate-spin" /> : <Check size={11} />}
+                        Save
+                      </button>
+                      <button
+                        onClick={cancelEditSummary}
+                        className="flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200 bg-white/4 border border-white/10 rounded-lg px-2.5 py-1 transition-colors"
+                      >
+                        <X size={11} /> Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={startEditSummary}
+                      className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-brand-300 hover:bg-brand-500/10 border border-transparent hover:border-brand-500/20 rounded-lg px-2.5 py-1 transition-all"
+                    >
+                      {hasSummary ? <><Pencil size={11} /> Edit</> : <><Plus size={11} /> Add data</>}
+                    </button>
+                  )}
+                </div>
 
+                {editingSummary ? (
+                  /* ── Edit mode ── */
+                  <div className="space-y-3">
+                    {([
+                      { key: 'patient_name',    label: 'Patient Name',    icon: User,       multiline: false },
+                      { key: 'patient_age',     label: 'Age',             icon: Calendar,   multiline: false },
+                      { key: 'patient_gender',  label: 'Gender',          icon: User,       multiline: false },
+                      { key: 'disease',         label: 'Condition / Disease', icon: HeartPulse, multiline: false },
+                      { key: 'education',       label: 'Education',       icon: BookOpen,   multiline: false },
+                      { key: 'emotional_state', label: 'Emotional State', icon: Smile,      multiline: false },
+                    ] as const).map(({ key, label, icon: Icon }) => (
+                      <div key={key}>
+                        <label className="flex items-center gap-1.5 text-[10px] font-semibold text-slate-500 uppercase tracking-wide mb-1">
+                          <Icon size={10} />
+                          {label}
+                        </label>
+                        <input
+                          type="text"
+                          value={summaryDraft[key] ?? ''}
+                          onChange={e => setSummaryDraft(d => ({ ...d, [key]: e.target.value }))}
+                          placeholder={`Enter ${label.toLowerCase()}…`}
+                          className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
+                        />
+                      </div>
+                    ))}
+                    <div>
+                      <label className="flex items-center gap-1.5 text-[10px] font-semibold text-slate-500 uppercase tracking-wide mb-1">
+                        <StickyNote size={10} />
+                        Additional Notes
+                      </label>
+                      <textarea
+                        value={summaryDraft.additional_notes ?? ''}
+                        onChange={e => setSummaryDraft(d => ({ ...d, additional_notes: e.target.value }))}
+                        placeholder="Medicines, allergies, follow-up instructions…"
+                        rows={3}
+                        className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent resize-none"
+                      />
+                    </div>
+                  </div>
+                ) : hasSummary ? (
+                  /* ── View mode ── */
                   <div className="space-y-3">
                     {[
                       { icon: User,       label: 'Patient',   value: summary!.patient_name    },
@@ -332,12 +507,10 @@ export default function SessionDetailPage() {
                           </div>
                           <div className="min-w-0">
                             <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">{label}</p>
-                            <p className="text-sm text-white truncate">{value}</p>
+                            <p className="text-sm text-white">{value}</p>
                           </div>
                         </div>
-                      ))
-                    }
-
+                      ))}
                     {summary!.additional_notes && (
                       <div className="pt-3 border-t border-white/8">
                         <div className="flex items-center gap-2 mb-2">
@@ -350,19 +523,15 @@ export default function SessionDetailPage() {
                       </div>
                     )}
                   </div>
-                </Card>
-              )}
-
-              {/* No extraction available */}
-              {!hasSummary && (
-                <Card variant="flat" className="p-5 text-center">
-                  <Brain size={24} className="mx-auto mb-3 text-slate-600" />
-                  <p className="text-sm text-slate-500">No medical extraction data.</p>
-                  <p className="text-xs text-slate-600 mt-1">
-                    Use Record & Extract to get AI-extracted fields.
-                  </p>
-                </Card>
-              )}
+                ) : (
+                  /* ── Empty state ── */
+                  <div className="py-6 text-center">
+                    <Brain size={24} className="mx-auto mb-3 text-slate-600" />
+                    <p className="text-sm text-slate-500">No extraction data yet.</p>
+                    <p className="text-xs text-slate-600 mt-1">Click "Add data" to enter fields manually.</p>
+                  </div>
+                )}
+              </Card>
 
               {/* Session metadata card */}
               <Card variant="flat" className="p-4">

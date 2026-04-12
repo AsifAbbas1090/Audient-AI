@@ -32,28 +32,6 @@ export default function SettingsPage() {
     setTimeout(() => setSaved(false), 2000)
   }
 
-  const sections = [
-    {
-      title: 'Appearance',
-      icon:  theme === 'dark' ? Moon : Sun,
-      content: (
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm font-medium text-white">Theme</p>
-            <p className="text-xs text-slate-500 mt-0.5">Switch between dark and light mode</p>
-          </div>
-          <div className="flex items-center gap-3">
-            <span className="text-xs text-slate-400 capitalize">{theme}</span>
-            <Button variant="secondary" size="sm" onClick={toggle}>
-              {theme === 'dark' ? <Sun size={13} /> : <Moon size={13} />}
-              {theme === 'dark' ? 'Light mode' : 'Dark mode'}
-            </Button>
-          </div>
-        </div>
-      ),
-    },
-  ]
-
   return (
     <div className="min-h-screen flex bg-surface-400">
       <Sidebar />
