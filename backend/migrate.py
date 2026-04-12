@@ -70,7 +70,15 @@ MIGRATIONS = [
     ALTER TABLE conversations
       ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
     """,
-    # ── audit_logs — entire table may be new ──────────────────────────────
+    # ── conversations (patient FK) — patients table must exist first ───────
+    # db.create_all() creates patients before adding the FK column.
+    # This ALTER is a defensive guard for re-runs after initial creation.
+    """
+    ALTER TABLE conversations
+      ADD COLUMN IF NOT EXISTS patient_id VARCHAR(36)
+      REFERENCES patients(id) ON DELETE SET NULL;
+    """,
+    # ── audit_logs / patients — entire tables may be new ──────────────────
     # db.create_all() handles creation below.
 ]
 

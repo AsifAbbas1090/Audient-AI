@@ -40,6 +40,14 @@ class Conversation(db.Model):
     approved_at = db.Column(db.DateTime(timezone=True), nullable=True)
     deleted_at  = db.Column(db.DateTime(timezone=True), nullable=True)  # soft delete
 
+    # Optional link to a Patient record
+    patient_id  = db.Column(
+        db.String(36),
+        db.ForeignKey("patients.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     # One-to-one relationships (cascade delete children with parent)
     audio_file = db.relationship(
         "AudioFile", backref="conversation", uselist=False, cascade="all, delete-orphan"
@@ -64,10 +72,12 @@ class Conversation(db.Model):
             "created_at":  self.created_at.isoformat() if self.created_at else None,
             "approved_at": self.approved_at.isoformat() if self.approved_at else None,
             "deleted_at":  self.deleted_at.isoformat()  if self.deleted_at  else None,
+            "patient_id":  self.patient_id,
+            "patient_name": self.patient.name if self.patient else None,
         }
 
     def to_dict_full(self) -> dict:
-        """Full representation including nested transcript, summary, audio."""
+        """Full representation including nested transcript, summary, audio, patient."""
         data = self.to_dict()
         if self.transcript:
             data["transcript"] = self.transcript.to_dict_full()
@@ -75,6 +85,8 @@ class Conversation(db.Model):
             data["summary"] = self.summary.to_dict()
         if self.audio_file:
             data["audio_file"] = self.audio_file.to_dict()
+        if self.patient:
+            data["patient"] = self.patient.to_dict()
         return data
 
 

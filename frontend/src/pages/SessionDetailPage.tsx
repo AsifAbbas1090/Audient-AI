@@ -6,6 +6,7 @@ import {
   Calendar, HeartPulse, BookOpen, Smile, StickyNote,
   Pencil, X, Check, Plus, Lock, ShieldCheck, Bell,
   Sparkles, FlaskConical, Stethoscope, TriangleAlert, RefreshCw,
+  UserSearch, UserPlus, Phone, Link2, Unlink,
 } from 'lucide-react'
 import { Sidebar }       from '../components/ui/Sidebar'
 import { Button }        from '../components/ui/Button'
@@ -56,6 +57,15 @@ interface Recommendations {
   risk_flags:             string[]
 }
 
+interface Patient {
+  id:              string
+  name:            string
+  age:             string | null
+  gender:          string | null
+  contact:         string | null
+  medical_history: string | null
+}
+
 interface Conversation {
   id:          string
   title:       string | null
@@ -64,6 +74,8 @@ interface Conversation {
   duration:    number | null
   created_at:  string
   approved_at: string | null
+  patient_id:  string | null
+  patient?:    Patient | null
   transcript?: {
     raw_text:   string | null
     lines:      TranscriptLine[]
@@ -121,6 +133,16 @@ export default function SessionDetailPage() {
   const [recommendations,     setRecommendations]     = useState<Recommendations | null>(null)
   const [loadingRecommend,    setLoadingRecommend]    = useState(false)
   const [recommendError,      setRecommendError]      = useState<string | null>(null)
+
+  // Patient linking
+  const [patientSearch,       setPatientSearch]       = useState('')
+  const [patientResults,      setPatientResults]      = useState<Patient[]>([])
+  const [searchingPatient,    setSearchingPatient]    = useState(false)
+  const [showPatientDropdown, setShowPatientDropdown] = useState(false)
+  const [linkingPatient,      setLinkingPatient]      = useState(false)
+  const [showNewPatient,      setShowNewPatient]      = useState(false)
+  const [newPatientName,      setNewPatientName]      = useState('')
+  const patientSearchRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Summary editing
   const [editingSummary, setEditingSummary] = useState(false)
@@ -266,6 +288,52 @@ export default function SessionDetailPage() {
     } catch {
       toast('Could not resolve alert', 'error')
     }
+  }
+
+  // ── Patient search / link ────────────────────────────────
+  function handlePatientSearchChange(val: string) {
+    setPatientSearch(val)
+    setShowPatientDropdown(true)
+    if (patientSearchRef.current) clearTimeout(patientSearchRef.current)
+    if (!val.trim()) { setPatientResults([]); return }
+    patientSearchRef.current = setTimeout(async () => {
+      setSearchingPatient(true)
+      try {
+        const res = await api.get<{ patients: Patient[] }>(`/api/patients?q=${encodeURIComponent(val)}&limit=8`)
+        setPatientResults(res.data.patients)
+      } catch { /* silent */ }
+      finally { setSearchingPatient(false) }
+    }, 300)
+  }
+
+  async function linkPatient(patientId: string | null) {
+    if (!conv) return
+    setLinkingPatient(true)
+    try {
+      const res = await api.patch(`/api/conversations/${conv.id}/patient`, { patient_id: patientId })
+      setConv(prev => prev ? {
+        ...prev,
+        patient_id: res.data.conversation.patient_id,
+        patient:    res.data.conversation.patient ?? null,
+      } : prev)
+      toast(patientId ? 'Patient linked' : 'Patient unlinked', 'success')
+    } catch { toast('Could not update patient link', 'error') }
+    finally {
+      setLinkingPatient(false)
+      setPatientSearch('')
+      setPatientResults([])
+      setShowPatientDropdown(false)
+      setShowNewPatient(false)
+    }
+  }
+
+  async function createAndLinkPatient() {
+    if (!conv || !newPatientName.trim()) return
+    setLinkingPatient(true)
+    try {
+      const res = await api.post<{ patient: Patient }>('/api/patients', { name: newPatientName.trim() })
+      await linkPatient(res.data.patient.id)
+    } catch { toast('Could not create patient', 'error'); setLinkingPatient(false) }
   }
 
   // ── Export ────────────────────────────────────────────────
@@ -859,6 +927,142 @@ export default function SessionDetailPage() {
                   </Card>
                 )
               })()}
+
+              {/* Patient card */}
+              <Card variant="elevated" className="p-5">
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="font-semibold text-white text-sm flex items-center gap-2">
+                    <User size={14} className="text-brand-400" />
+                    Patient
+                  </h2>
+                  {conv.patient && !isApproved && (
+                    <button
+                      onClick={() => linkPatient(null)}
+                      disabled={linkingPatient}
+                      className="flex items-center gap-1 text-[10px] text-slate-500 hover:text-red-400 transition-colors"
+                      title="Unlink patient"
+                    >
+                      <Unlink size={10} /> Unlink
+                    </button>
+                  )}
+                </div>
+
+                {conv.patient ? (
+                  /* Linked patient view */
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <div className="h-8 w-8 rounded-full bg-brand-500/20 border border-brand-500/30 flex items-center justify-center shrink-0">
+                        <span className="text-sm font-bold text-brand-400">
+                          {conv.patient.name.charAt(0).toUpperCase()}
+                        </span>
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-white truncate">{conv.patient.name}</p>
+                        <p className="text-[10px] text-slate-500">
+                          {[conv.patient.age, conv.patient.gender].filter(Boolean).join(' · ') || 'No details'}
+                        </p>
+                      </div>
+                    </div>
+                    {conv.patient.contact && (
+                      <div className="flex items-center gap-1.5 text-xs text-slate-400">
+                        <Phone size={10} className="text-slate-600" />
+                        {conv.patient.contact}
+                      </div>
+                    )}
+                    {conv.patient.medical_history && (
+                      <p className="text-xs text-slate-400 bg-white/4 rounded-lg px-3 py-2 leading-relaxed line-clamp-3">
+                        {conv.patient.medical_history}
+                      </p>
+                    )}
+                  </div>
+                ) : isApproved ? (
+                  <p className="text-xs text-slate-500 py-2">No patient linked.</p>
+                ) : (
+                  /* Search / link UI */
+                  <div className="space-y-2">
+                    {!showNewPatient ? (
+                      <>
+                        <div className="relative">
+                          <UserSearch size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
+                          <input
+                            type="text"
+                            value={patientSearch}
+                            onChange={e => handlePatientSearchChange(e.target.value)}
+                            onFocus={() => patientSearch && setShowPatientDropdown(true)}
+                            onBlur={() => setTimeout(() => setShowPatientDropdown(false), 150)}
+                            placeholder="Search patients…"
+                            className="w-full bg-white/5 border border-white/10 rounded-xl pl-8 pr-3 py-2 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-brand-500"
+                          />
+                          {searchingPatient && (
+                            <Loader2 size={11} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 animate-spin" />
+                          )}
+
+                          {/* Dropdown */}
+                          {showPatientDropdown && (patientResults.length > 0 || patientSearch) && (
+                            <div className="absolute z-20 top-full mt-1 w-full bg-surface-300 border border-white/10 rounded-xl shadow-xl overflow-hidden">
+                              {patientResults.map(p => (
+                                <button
+                                  key={p.id}
+                                  onMouseDown={() => linkPatient(p.id)}
+                                  className="w-full flex items-center gap-2 px-3 py-2 hover:bg-white/8 text-left transition-colors"
+                                >
+                                  <div className="h-6 w-6 rounded-full bg-brand-500/20 flex items-center justify-center shrink-0">
+                                    <span className="text-[10px] font-bold text-brand-400">{p.name.charAt(0).toUpperCase()}</span>
+                                  </div>
+                                  <div className="min-w-0">
+                                    <p className="text-xs font-medium text-white truncate">{p.name}</p>
+                                    <p className="text-[10px] text-slate-500">{[p.age, p.gender].filter(Boolean).join(' · ') || '—'}</p>
+                                  </div>
+                                  <Link2 size={10} className="ml-auto text-slate-600 shrink-0" />
+                                </button>
+                              ))}
+                              {patientResults.length === 0 && patientSearch && !searchingPatient && (
+                                <div className="px-3 py-2 text-xs text-slate-500">No patients found</div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        <button
+                          onClick={() => setShowNewPatient(true)}
+                          className="flex items-center gap-1.5 text-xs text-brand-400 hover:text-brand-300 transition-colors"
+                        >
+                          <UserPlus size={11} /> Create new patient
+                        </button>
+                      </>
+                    ) : (
+                      /* New patient inline form */
+                      <div className="space-y-2">
+                        <input
+                          type="text"
+                          value={newPatientName}
+                          onChange={e => setNewPatientName(e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') createAndLinkPatient() }}
+                          placeholder="Patient full name…"
+                          autoFocus
+                          className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-brand-500"
+                        />
+                        <div className="flex gap-2">
+                          <button
+                            onClick={createAndLinkPatient}
+                            disabled={!newPatientName.trim() || linkingPatient}
+                            className="flex items-center gap-1.5 text-xs text-emerald-400 hover:text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-1.5 disabled:opacity-50 transition-colors"
+                          >
+                            {linkingPatient ? <Loader2 size={10} className="animate-spin" /> : <Check size={10} />}
+                            Create & Link
+                          </button>
+                          <button
+                            onClick={() => { setShowNewPatient(false); setNewPatientName('') }}
+                            className="text-xs text-slate-500 hover:text-slate-300 bg-white/4 border border-white/8 rounded-lg px-3 py-1.5 transition-colors"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </Card>
 
               {/* Session metadata card */}
               <Card variant="flat" className="p-4">
