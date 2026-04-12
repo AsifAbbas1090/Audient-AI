@@ -10,19 +10,18 @@ psycopg2-binary
 # Environment
 python-dotenv
 
-# Speech-to-text
-faster-whisper
+# Authentication
+PyJWT>=2.8.0
+bcrypt>=4.0.0
 
-# Speaker diarization
-pyannote.audio
+# Transcription + Extraction (online — Groq API)
+groq>=0.9.0
 
-# Audio / tensor processing
-torch
-torchaudio
-soundfile
+# Audio utilities (minimal — just for file handling)
 numpy
+soundfile
 
-# LLM extraction
+# Ollama fallback (offline extraction — optional)
 openai
 
 # Production server

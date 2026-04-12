@@ -43,17 +43,30 @@ class Config:
     WHISPER_MODEL: str = os.getenv("WHISPER_MODEL", "base").strip() or "base"
 
     # ------------------------------------------------------------------ #
-    # Speaker Diarization (Pyannote)                                      #
+    # Groq API (transcription + extraction — online, free tier)           #
+    # ------------------------------------------------------------------ #
+    GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "").strip()
+    GROQ_TRANSCRIBE_MODEL: str = "whisper-large-v3"
+    GROQ_EXTRACT_MODEL: str = os.getenv("GROQ_EXTRACT_MODEL", "llama-3.1-8b-instant").strip()
+
+    # ------------------------------------------------------------------ #
+    # Speaker Diarization (Pyannote — offline, optional)                  #
     # ------------------------------------------------------------------ #
     HF_TOKEN: str = os.getenv("HF_TOKEN", os.getenv("HUGGINGFACE_TOKEN", "")).strip()
 
     # ------------------------------------------------------------------ #
-    # Medical Extraction (Ollama — fully offline LLM)                     #
+    # Medical Extraction fallback (Ollama — fully offline)                #
     # ------------------------------------------------------------------ #
     OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1").strip()
     OLLAMA_EXTRACT_MODEL: str = (
         os.getenv("OLLAMA_EXTRACT_MODEL", "phi3:mini").strip() or "phi3:mini"
     )
+
+    # ------------------------------------------------------------------ #
+    # Authentication (JWT)                                                 #
+    # ------------------------------------------------------------------ #
+    JWT_SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "jwt-secret-change-in-production")
+    JWT_EXPIRY_DAYS: int = int(os.getenv("JWT_EXPIRY_DAYS", "7"))
 
     # ------------------------------------------------------------------ #
     # Server                                                               #
