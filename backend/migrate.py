@@ -65,9 +65,13 @@ MIGRATIONS = [
     ALTER TABLE transcripts
       ADD COLUMN IF NOT EXISTS confidence_score FLOAT;
     """,
-    # ── field_reminders — entire table may be new ──────────────────────────
-    # db.create_all() handles creation; this is a no-op guard
-    # (the table has no columns added after initial definition)
+    # ── conversations (soft delete) ────────────────────────────────────────
+    """
+    ALTER TABLE conversations
+      ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+    """,
+    # ── audit_logs — entire table may be new ──────────────────────────────
+    # db.create_all() handles creation below.
 ]
 
 

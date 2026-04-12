@@ -10,7 +10,9 @@ from flask import Blueprint, jsonify, request, g
 from extensions import db
 from models.user import User
 from models.conversation import Conversation
+from models.audit_log import AuditLog
 from utils.auth import require_admin
+from utils.audit import log_action
 
 admin_bp = Blueprint("admin", __name__, url_prefix="/api/admin")
 
@@ -86,6 +88,7 @@ def update_user(user_id: str):
         return jsonify({"error": "User not found"}), 404
 
     data = request.get_json() or {}
+    old_role = user.role
     if "role" in data and data["role"] in ("healthcare", "admin"):
         user.role = data["role"]
     if "process_mode" in data and data["process_mode"] in ("online", "offline"):
@@ -94,6 +97,8 @@ def update_user(user_id: str):
         user.name = data["name"].strip()
 
     try:
+        if "role" in data and user.role != old_role:
+            log_action("user_role_changed", "user", user_id, {"old_role": old_role, "new_role": user.role, "target_name": user.name})
         db.session.commit()
     except Exception as e:
         db.session.rollback()
@@ -115,6 +120,7 @@ def delete_user(user_id: str):
         return jsonify({"error": "User not found"}), 404
 
     try:
+        log_action("user_deleted", "user", user_id, {"name": user.name, "email": user.email})
         db.session.delete(user)
         db.session.commit()
     except Exception as e:
@@ -122,3 +128,48 @@ def delete_user(user_id: str):
         return jsonify({"error": str(e)}), 500
 
     return jsonify({"message": f"User {user_id} deleted"}), 200
+
+
+# ── Audit log ────────────────────────────────────────────────
+
+@admin_bp.route("/audit-log", methods=["GET"])
+@require_admin
+def audit_log():
+    """
+    Return recent audit log entries.
+    Query params:
+      limit  — max rows (default 50, max 200)
+      action — filter by action string
+    """
+    limit  = min(int(request.args.get("limit",  50)),  200)
+    action = request.args.get("action", "").strip()
+
+    query = AuditLog.query
+    if action:
+        query = query.filter_by(action=action)
+
+    entries = query.order_by(AuditLog.created_at.desc()).limit(limit).all()
+    return jsonify({"audit_log": [e.to_dict() for e in entries], "total": len(entries)}), 200
+
+
+# ── Restore soft-deleted conversation ────────────────────────
+
+@admin_bp.route("/conversations/<string:conv_id>/restore", methods=["POST"])
+@require_admin
+def restore_conversation(conv_id: str):
+    """Admin-only: un-delete a soft-deleted conversation."""
+    conv = Conversation.query.get(conv_id)
+    if not conv:
+        return jsonify({"error": "Conversation not found"}), 404
+    if not conv.deleted_at:
+        return jsonify({"error": "Conversation is not deleted"}), 400
+
+    try:
+        conv.deleted_at = None
+        log_action("session_restored", "conversation", conv_id, {"title": conv.title})
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+    return jsonify({"conversation": conv.to_dict()}), 200

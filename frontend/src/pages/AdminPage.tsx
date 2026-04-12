@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Users, Activity, ShieldCheck, Trash2, Pencil, X, Check,
-  ChevronRight, BarChart3, Mic,
+  ChevronRight, BarChart3, Mic, ClipboardList,
 } from 'lucide-react'
 import api from '../lib/api'
 import { getUser, logout } from '../hooks/useAuth'
@@ -17,6 +17,17 @@ type RoleType = 'healthcare' | 'admin'
 interface AdminStats {
   users: { total: number; healthcare: number; admin: number }
   conversations: { total: number; processing: number; done: number; failed: number }
+}
+
+interface AuditEntry {
+  id:            string
+  user_id:       string | null
+  user_name:     string | null
+  action:        string
+  resource_type: string | null
+  resource_id:   string | null
+  details:       Record<string, unknown> | null
+  created_at:    string
 }
 
 interface AdminUser {
@@ -55,6 +66,8 @@ export default function AdminPage() {
   const [editRole,   setEditRole]   = useState<RoleType>('healthcare')
   const [saving,     setSaving]     = useState(false)
   const [deleteId,   setDeleteId]   = useState<string | null>(null)
+  const [auditLog,   setAuditLog]   = useState<AuditEntry[]>([])
+  const [auditLoading, setAuditLoading] = useState(false)
 
   // Fetch stats + users
   useEffect(() => {
@@ -68,6 +81,15 @@ export default function AdminPage() {
       })
       .catch(console.error)
       .finally(() => setLoading(false))
+  }, [])
+
+  // Fetch audit log
+  useEffect(() => {
+    setAuditLoading(true)
+    api.get<{ audit_log: AuditEntry[] }>('/api/admin/audit-log?limit=50')
+      .then(r => setAuditLog(r.data.audit_log))
+      .catch(console.error)
+      .finally(() => setAuditLoading(false))
   }, [])
 
   async function handleLogout() {
@@ -310,6 +332,64 @@ export default function AdminPage() {
             </div>
           )}
         </Card>
+        {/* ── Audit Log ───────────────────────────────── */}
+        <Card variant="elevated" className="overflow-hidden">
+          <div className="p-5 border-b border-white/8 flex items-center justify-between">
+            <h2 className="font-semibold text-white flex items-center gap-2">
+              <ClipboardList size={16} className="text-brand-400" />
+              Audit Log
+              <span className="ml-1 text-xs text-slate-500 font-normal">(last 50 events)</span>
+            </h2>
+          </div>
+
+          {auditLoading ? (
+            <div className="p-8 text-center text-slate-500 text-sm">Loading…</div>
+          ) : auditLog.length === 0 ? (
+            <div className="p-8 text-center text-slate-500 text-sm">No events recorded yet.</div>
+          ) : (
+            <div className="divide-y divide-white/6">
+              {auditLog.map(entry => {
+                const actionColor: Record<string, string> = {
+                  session_created:   'text-emerald-400 bg-emerald-500/10',
+                  session_approved:  'text-sky-400 bg-sky-500/10',
+                  session_deleted:   'text-red-400 bg-red-500/10',
+                  session_restored:  'text-amber-400 bg-amber-500/10',
+                  summary_updated:   'text-purple-400 bg-purple-500/10',
+                  user_role_changed: 'text-brand-400 bg-brand-500/10',
+                  user_deleted:      'text-red-400 bg-red-500/10',
+                }
+                const colorClass = actionColor[entry.action] ?? 'text-slate-400 bg-white/6'
+                const label = entry.action.replace(/_/g, ' ')
+
+                return (
+                  <div key={entry.id} className="flex items-center gap-4 px-5 py-3 hover:bg-white/3 transition-colors">
+                    <span className={`shrink-0 text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 ${colorClass}`}>
+                      {label}
+                    </span>
+                    <span className="flex-1 text-xs text-slate-400 truncate">
+                      {entry.user_name || 'System'}
+                      {entry.details && (
+                        <span className="ml-2 text-slate-600">
+                          {entry.details.title as string
+                            || entry.details.target_name as string
+                            || entry.details.name as string
+                            || ''}
+                        </span>
+                      )}
+                    </span>
+                    <span className="shrink-0 text-[10px] text-slate-600">
+                      {new Date(entry.created_at).toLocaleString(undefined, {
+                        month: 'short', day: 'numeric',
+                        hour: '2-digit', minute: '2-digit',
+                      })}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </Card>
+
       </main>
     </div>
   )

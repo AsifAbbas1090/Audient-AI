@@ -20,6 +20,7 @@ from models.conversation import Conversation, AudioFile
 from models.transcript import Transcript, TranscriptLine
 from models.summary import Summary, FieldReminder
 from utils.auth import require_auth, optional_auth
+from utils.audit import log_action
 
 conversations_bp = Blueprint("conversations", __name__, url_prefix="/api/conversations")
 
@@ -126,7 +127,7 @@ def _generate_field_reminders(summary: "Summary") -> None:
 @require_auth
 def list_conversations():
     """Return conversations belonging to the authenticated user."""
-    query = Conversation.query.filter_by(user_id=g.user_id)
+    query = Conversation.query.filter_by(user_id=g.user_id).filter(Conversation.deleted_at.is_(None))
 
     status = request.args.get("status")
     if status in ("processing", "complete", "failed"):
@@ -185,6 +186,7 @@ def create_conversation():
         if conv.summary:
             _generate_field_reminders(conv.summary)
 
+        log_action("session_created", "conversation", conv.id, {"title": conv.title})
         db.session.commit()
         return jsonify({"success": True, "conversation_id": conv.id, "conversation": conv.to_dict()}), 201
 
@@ -200,7 +202,7 @@ def create_conversation():
 @require_auth
 def get_conversation(conv_id: str):
     conv = Conversation.query.get(conv_id)
-    if not conv:
+    if not conv or (conv.deleted_at and g.user_role != "admin"):
         return jsonify({"error": "Conversation not found"}), 404
     if conv.user_id and conv.user_id != g.user_id and g.user_role != "admin":
         return jsonify({"error": "Access denied"}), 403
@@ -294,15 +296,18 @@ def update_conversation(conv_id: str):
     data = request.get_json() or {}
     if "title" in data:
         conv.title = (data["title"] or "").strip() or conv.title
+    new_status = None
     if "status" in data and data["status"] in ("processing", "complete", "failed", "approved"):
-        if data["status"] == "approved":
+        new_status = data["status"]
+        if new_status == "approved":
             conv.approved_at = datetime.now(timezone.utc)
         elif conv.status == "approved":
-            # Un-approving: clear the timestamp
             conv.approved_at = None
-        conv.status = data["status"]
+        conv.status = new_status
 
     try:
+        if new_status == "approved":
+            log_action("session_approved", "conversation", conv.id, {"title": conv.title})
         db.session.commit()
     except Exception as e:
         db.session.rollback()
@@ -323,7 +328,8 @@ def delete_conversation(conv_id: str):
         return jsonify({"error": "Access denied"}), 403
 
     try:
-        db.session.delete(conv)
+        conv.deleted_at = datetime.now(timezone.utc)
+        log_action("session_deleted", "conversation", conv.id, {"title": conv.title})
         db.session.commit()
     except Exception as e:
         db.session.rollback()
@@ -371,6 +377,7 @@ def update_summary(conv_id: str):
                 setattr(summary, field, (data[field] or "").strip() or None)
 
         _generate_field_reminders(summary)
+        log_action("summary_updated", "conversation", conv_id)
         db.session.commit()
         return jsonify({"summary": summary.to_dict()}), 200
 

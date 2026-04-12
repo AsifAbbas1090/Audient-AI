@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Square, Clock, WifiOff, Download, Trash2, Save, CheckCircle2 } from 'lucide-react'
+import { Square, Clock, WifiOff, Download, Trash2, Save, CheckCircle2, Mic, MicOff } from 'lucide-react'
 import { Sidebar }       from '../components/ui/Sidebar'
 import { Badge }         from '../components/ui/Badge'
 import { Button }        from '../components/ui/Button'
@@ -7,8 +7,9 @@ import { Card }          from '../components/ui/Card'
 import { Waveform }      from '../components/visual/Waveform'
 import { RecordButton }  from '../components/visual/RecordButton'
 import { SpeakerBubble } from '../components/visual/SpeakerBubble'
-import { useMediaRecorder } from '../hooks/useMediaRecorder'
-import { useToast }         from '../components/ui/Toaster'
+import { useMediaRecorder }   from '../hooks/useMediaRecorder'
+import { useVoiceCommands }   from '../hooks/useVoiceCommands'
+import { useToast }           from '../components/ui/Toaster'
 import api from '../lib/api'
 
 // ── Constants ────────────────────────────────────────────────
@@ -327,6 +328,26 @@ export default function LiveSessionPage() {
     pendingSessionIdRef.current = null
   }
 
+  // ── Voice commands ───────────────────────────────────────────
+  const { listening, lastCommand, supported: voiceSupported, startListening, stopListening } =
+    useVoiceCommands({
+      onStart:  () => { if (!active) toggle() },
+      onStop:   () => { if (active)  handleStop() },
+      onPause:  () => { if (active && !paused) toggle() },
+      onResume: () => { if (active && paused)  toggle() },
+      onClear:  handleClear,
+    })
+
+  function toggleVoice() {
+    if (listening) {
+      stopListening()
+      toast('Voice commands off', 'info')
+    } else {
+      startListening()
+      toast('Voice commands on — say "start", "stop", "pause", "resume", or "clear"', 'info')
+    }
+  }
+
   const handleExport = () => {
     const text = segments.map(s => `[${s.speaker}] ${s.text}`).join('\n')
     const blob  = new Blob([text], { type: 'text/plain' })
@@ -386,8 +407,34 @@ export default function LiveSessionPage() {
               <WifiOff size={12} />
               Offline
             </div>
+
+            {/* Voice commands toggle */}
+            {voiceSupported && (
+              <button
+                onClick={toggleVoice}
+                title={listening ? 'Voice commands ON — click to disable' : 'Enable voice commands'}
+                className={`flex items-center gap-1.5 text-xs rounded-xl px-3 py-1.5 border transition-all ${
+                  listening
+                    ? 'text-brand-300 bg-brand-500/15 border-brand-500/30 animate-pulse'
+                    : 'text-slate-500 bg-white/4 border-white/8 hover:text-slate-300'
+                }`}
+              >
+                {listening ? <Mic size={12} /> : <MicOff size={12} />}
+                {listening ? 'Voice ON' : 'Voice'}
+              </button>
+            )}
           </div>
         </header>
+
+        {/* Voice command flash */}
+        {lastCommand && (
+          <div className="shrink-0 flex justify-center py-2 pointer-events-none">
+            <div className="flex items-center gap-2 bg-brand-500/20 border border-brand-500/30 text-brand-200 text-sm font-medium px-4 py-2 rounded-full shadow-lg">
+              <Mic size={13} />
+              Command: <span className="font-bold capitalize">{lastCommand}</span>
+            </div>
+          </div>
+        )}
 
         {/* ── Body ─────────────────────────────────────────── */}
         <div className="flex-1 overflow-hidden flex gap-0 lg:gap-6 p-6">
@@ -512,6 +559,11 @@ export default function LiveSessionPage() {
                 <li>· Transcription runs every 3 seconds</li>
                 <li>· Session auto-saves when you end</li>
                 <li>· Export available after session ends</li>
+                {voiceSupported && (
+                  <li className="pt-1 border-t border-white/6 text-brand-400">
+                    · Say "start", "stop", "pause", "resume", or "clear"
+                  </li>
+                )}
               </ul>
             </Card>
 

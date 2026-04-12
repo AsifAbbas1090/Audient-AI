@@ -38,6 +38,7 @@ class Conversation(db.Model):
     is_offline  = db.Column(db.Boolean, default=True, nullable=False)
     created_at  = db.Column(db.DateTime(timezone=True), default=_now)
     approved_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    deleted_at  = db.Column(db.DateTime(timezone=True), nullable=True)  # soft delete
 
     # One-to-one relationships (cascade delete children with parent)
     audio_file = db.relationship(
@@ -62,6 +63,7 @@ class Conversation(db.Model):
             "is_offline":  self.is_offline,
             "created_at":  self.created_at.isoformat() if self.created_at else None,
             "approved_at": self.approved_at.isoformat() if self.approved_at else None,
+            "deleted_at":  self.deleted_at.isoformat()  if self.deleted_at  else None,
         }
 
     def to_dict_full(self) -> dict:
