@@ -1,35 +1,46 @@
 /**
- * useLiveSession — WebSocket-based live recording hook.
+ * useLiveSession — WebSocket-based live recording hook (v3).
  *
- * Replaces the HTTP-polling chunk loop in LiveSessionPage.
+ * Audio strategy (stop-restart cycle):
+ *   Every CHUNK_MS the doctor (and optional patient) MediaRecorder is stopped,
+ *   the accumulated blob is sent to the server as a complete valid WebM, and
+ *   the recorder is immediately restarted on the same stream.  This avoids the
+ *   "invalid media file" error that the sliding-window/timeslice approach caused:
+ *   prepending an EBML header to mid-recording clusters produces timestamps that
+ *   don't start at 0, so ffmpeg (Groq's backend) rejects the file.
  *
- * What changed vs the old approach:
- *   OLD: POST /api/transcribe every 3s  →  wait for HTTP response  →  append text
- *   NEW: emit 'audio_chunk' over socket →  server pushes 'transcript_update' back
+ * Dual-channel mic:
+ *   If patientDeviceId is supplied, a second MediaRecorder runs on the patient
+ *   mic.  Patient chunks are tagged forced_speaker="Patient" so the server
+ *   assigns the label without running diarization on them.
  *
- * Why this is faster:
- *   - No TCP handshake overhead per chunk (persistent connection)
- *   - Server pushes the result the moment Groq responds — no polling delay
- *   - Diarization updates also pushed as server events ('diarize_update')
- *   - Reconnection is automatic via socket.io-client's built-in retry logic
- *
- * Fallback:
- *   If the WebSocket connection fails (e.g. a corporate proxy blocks upgrade),
- *   socket.io-client falls back to long-polling automatically — the API calls
- *   still succeed, just with slightly higher latency.
+ * Incremental extraction:
+ *   Every EXTRACT_MS a POST /api/extract call is made with the current
+ *   transcript.  The result is merged into liveFields state for a live preview
+ *   panel in the UI.
  */
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { io, Socket }        from 'socket.io-client'
+import { useMediaRecorder }  from './useMediaRecorder'
 
-import { useEffect, useRef, useState, useCallback } from 'react'
-import { io, Socket }         from 'socket.io-client'
-import { useMediaRecorder }   from './useMediaRecorder'
-
-// ── Types ────────────────────────────────────────────────────────────────────
+// ── Types ─────────────────────────────────────────────────────────────────────
 export type Segment = {
-  id:       number
-  speaker:  string
-  text:     string
-  start?:   number
-  end?:     number
+  id:      number
+  speaker: string
+  text:    string
+  start?:  number
+  end?:    number
+}
+
+export type LiveFields = {
+  Name?:            string | null
+  Age?:             string | null
+  Gender?:          string | null
+  Disease?:         string | null
+  Education?:       string | null
+  EmotionalState?:  string | null
+  AdditionalNotes?: string | null
+  [key: string]:    unknown
 }
 
 type RawSegment = {
@@ -39,86 +50,94 @@ type RawSegment = {
   end?:     number
 }
 
-// ── Constants ────────────────────────────────────────────────────────────────
-// 5 s chunks give Whisper more audio context → better word boundary detection
-// and fewer split-word errors than the previous 3 s interval.
-const CHUNK_MS      = 5_000
-// Re-run diarization every 15 s (Groq LLM call — not free to run constantly)
-const DIARIZE_MS    = 15_000
+// ── Constants ─────────────────────────────────────────────────────────────────
+const CHUNK_MS     = 5_000   // stop-restart cycle interval
+const DIARIZE_MS   = 15_000  // diarize interval
+const EXTRACT_MS   = 60_000  // incremental extraction interval
 
-const API_BASE = () =>
-  (import.meta.env.VITE_API_URL as string | undefined) || 'http://localhost:5000'
+// In dev (Vite proxy) '' routes through the proxy to :5000.
+// In production set VITE_API_URL to the backend origin.
+const API_BASE = (): string =>
+  (import.meta.env.VITE_API_URL as string | undefined) ?? window.location.origin
 
-// ── Segment ID counter (module-level, never resets mid-session) ──────────────
+// Module-level segment ID counter (never resets mid-tab)
 let _idCounter = 0
 
-// ── Hook ─────────────────────────────────────────────────────────────────────
+// ── Hook ──────────────────────────────────────────────────────────────────────
 export function useLiveSession(opts: {
   onTranscriptUpdate: (newSegs: Segment[]) => void
   onDiarizeUpdate:    (allSegs: RawSegment[]) => void
   onLanguage?:        (lang: string) => void
   onError?:           (msg: string) => void
+  doctorDeviceId?:    string   // optional: specific doctor microphone
+  patientDeviceId?:   string   // optional: enables dual-channel patient mic
 }) {
   const [connected,  setConnected]  = useState(false)
   const [sessionId,  setSessionId]  = useState<string | null>(null)
   const [active,     setActive]     = useState(false)
   const [paused,     setPaused]     = useState(false)
+  const [liveFields, setLiveFields] = useState<LiveFields>({})
 
-  const socketRef         = useRef<Socket | null>(null)
-  const sessionIdRef      = useRef<string | null>(null)
-  const timeOffsetRef     = useRef(0)
-  const detectedLangRef   = useRef<string>('Unknown')
-  const chunkIntervalRef  = useRef<ReturnType<typeof setInterval> | null>(null)
-  const diarizeIntervalRef= useRef<ReturnType<typeof setInterval> | null>(null)
-  const segmentsRef       = useRef<Segment[]>([])   // mirror of state — for diarize call
+  const socketRef          = useRef<Socket | null>(null)
+  const sessionIdRef       = useRef<string | null>(null)
+  const timeOffsetRef      = useRef(0)
+  const detectedLangRef    = useRef<string>('Unknown')
 
-  const {
-    recording, start, stop, reset, getBlob, chunks, permissionError, takeChunk,
-  } = useMediaRecorder({ mimeType: 'audio/webm' })
+  const chunkIntervalRef   = useRef<ReturnType<typeof setInterval> | null>(null)
+  const patientIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const diarizeIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const extractIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const segmentsRef        = useRef<Segment[]>([])
 
-  // ── Connect ────────────────────────────────────────────────────────────────
+  // Guards: prevent two overlapping takeChunk() calls on the same recorder
+  const drChunkBusyRef = useRef(false)
+  const ptChunkBusyRef = useRef(false)
+
+  // Two recorders: doctor (always) + patient (dual-mic only).
+  // No timeslice — legacy stop-restart mode produces valid complete WebM blobs.
+  const doctorRec  = useMediaRecorder({ mimeType: 'audio/webm' })
+  const patientRec = useMediaRecorder({ mimeType: 'audio/webm' })
+
+  // ── Socket connection ────────────────────────────────────────────────────────
   const connect = useCallback(() => {
     if (socketRef.current?.connected) return
 
-    const token = localStorage.getItem('token')
+    const token  = localStorage.getItem('jwt_token')
     const socket = io(API_BASE(), {
-      auth:         { token },
-      transports:   ['websocket', 'polling'],
-      reconnection: true,
+      auth:                 { token },
+      transports:           ['websocket', 'polling'],
+      reconnection:         true,
       reconnectionAttempts: 5,
-      reconnectionDelay: 1_000,
-      timeout:      10_000,
+      reconnectionDelay:    1_000,
+      timeout:              10_000,
     })
 
     socket.on('connect', () => {
       setConnected(true)
       console.log('[WS] connected', socket.id)
     })
-
     socket.on('disconnect', (reason) => {
       setConnected(false)
       console.log('[WS] disconnected:', reason)
     })
-
     socket.on('connect_error', (err) => {
       console.warn('[WS] connect error:', err.message)
       opts.onError?.(`WebSocket: ${err.message}`)
     })
 
     socket.on('transcript_update', (data: { segments: RawSegment[]; language: string }) => {
-      const raw = data.segments || []
-      const newSegs: Segment[] = raw
-        .filter(s => (s.text || '').trim())
+      const raw     = data.segments ?? []
+      const newSegs = raw
+        .filter(s => (s.text ?? '').trim())
         .map(s => ({
           id:      ++_idCounter,
-          speaker: s.speaker || 'Speaker 1',
-          text:    (s.text || '').trim(),
+          speaker: s.speaker ?? 'Speaker 1',
+          text:    (s.text ?? '').trim(),
           start:   (s.start ?? 0) + timeOffsetRef.current,
           end:     (s.end   ?? 0) + timeOffsetRef.current,
         }))
 
       if (newSegs.length) {
-        // Advance the time offset by the furthest end timestamp
         const maxEnd = newSegs.reduce((m, s) => Math.max(m, s.end ?? 0), 0)
         timeOffsetRef.current = Math.max(timeOffsetRef.current, maxEnd)
         opts.onTranscriptUpdate(newSegs)
@@ -131,38 +150,38 @@ export function useLiveSession(opts: {
     })
 
     socket.on('diarize_update', (data: { segments: RawSegment[] }) => {
-      if (data.segments?.length) {
-        opts.onDiarizeUpdate(data.segments)
-      }
+      if (data.segments?.length) opts.onDiarizeUpdate(data.segments)
     })
 
     socket.on('session_error', (data: { error: string }) => {
-      opts.onError?.(data.error || 'Session error')
+      opts.onError?.(data.error ?? 'Session error')
     })
 
     socketRef.current = socket
-  }, [])   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [])  // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Disconnect on unmount ──────────────────────────────────────────────────
   useEffect(() => {
-    return () => {
-      socketRef.current?.disconnect()
-    }
+    return () => { socketRef.current?.disconnect() }
   }, [])
 
-  // ── Send a single audio blob as binary over the socket ────────────────────
-  const sendChunk = useCallback(async (blob: Blob, isFinal = false) => {
+  // ── Send one audio blob (with optional speaker override for patient mic) ──────
+  const sendChunk = useCallback(async (
+    blob: Blob,
+    isFinal = false,
+    forcedSpeaker?: string,
+  ) => {
     if (!socketRef.current?.connected || blob.size < 500) return
     const buffer = await blob.arrayBuffer()
     socketRef.current.emit('audio_chunk', {
-      session_id: sessionIdRef.current,
-      audio:      buffer,
-      language:   detectedLangRef.current !== 'Unknown' ? detectedLangRef.current : undefined,
-      is_final:   isFinal,
+      session_id:     sessionIdRef.current,
+      audio:          buffer,
+      language:       detectedLangRef.current !== 'Unknown' ? detectedLangRef.current : undefined,
+      is_final:       isFinal,
+      forced_speaker: forcedSpeaker,
     })
   }, [])
 
-  // ── Request diarization (called on interval + on stop) ────────────────────
+  // ── Diarization request ────────────────────────────────────────────────────────
   const requestDiarize = useCallback((segs: Segment[]) => {
     if (!socketRef.current?.connected || !sessionIdRef.current) return
     const withTime = segs
@@ -175,128 +194,197 @@ export function useLiveSession(opts: {
     })
   }, [])
 
-  // ── Start ──────────────────────────────────────────────────────────────────
-  const startSession = useCallback(async (): Promise<string | null> => {
-    connect()
-
-    // Create server-side session (DB row + audio accumulation slot)
-    let id: string | null = null
+  // ── Incremental extraction ─────────────────────────────────────────────────────
+  const runExtract = useCallback(async () => {
+    if (segmentsRef.current.length < 3) return
+    const text = segmentsRef.current.map(s => `[${s.speaker}] ${s.text}`).join('\n')
     try {
-      const token   = localStorage.getItem('token')
+      const token   = localStorage.getItem('jwt_token')
       const headers: Record<string, string> = { 'Content-Type': 'application/json' }
       if (token) headers['Authorization'] = `Bearer ${token}`
-
-      const res  = await fetch(`${API_BASE()}/api/session/start`, { method: 'POST', headers })
-      const json = await res.json()
-      id = json.session_id ?? null
+      const res = await fetch(`${API_BASE()}/api/extract`, {
+        method: 'POST',
+        headers,
+        body:   JSON.stringify({ text }),
+      })
+      if (!res.ok) return
+      const data = await res.json() as Record<string, unknown>
+      if (data && !data.error && !data.skipped) {
+        setLiveFields(prev => ({ ...prev, ...data }))
+      }
     } catch {
-      // Session ID is optional — transcription still works without DB
+      // Non-critical — never disrupt the live session for a failed extraction
+    }
+  }, [])
+
+  // ── Helper: start all polling intervals ───────────────────────────────────────
+  // Uses stop-restart cycle (takeChunk) — each call produces a self-contained
+  // valid WebM blob that Groq Whisper can parse without timestamp issues.
+  const _startIntervals = useCallback(() => {
+    // Doctor chunks: stop recorder → collect blob → restart → send to Groq
+    chunkIntervalRef.current = setInterval(async () => {
+      if (drChunkBusyRef.current) return   // previous cycle still in progress
+      drChunkBusyRef.current = true
+      try {
+        const blob = await doctorRec.takeChunk()
+        if (blob && blob.size >= 500) sendChunk(blob)
+      } finally {
+        drChunkBusyRef.current = false
+      }
+    }, CHUNK_MS)
+
+    // Patient chunks (dual-mic) — tagged so server skips diarization
+    if (opts.patientDeviceId) {
+      patientIntervalRef.current = setInterval(async () => {
+        if (ptChunkBusyRef.current) return
+        ptChunkBusyRef.current = true
+        try {
+          const blob = await patientRec.takeChunk()
+          if (blob && blob.size >= 500) sendChunk(blob, false, 'Patient')
+        } finally {
+          ptChunkBusyRef.current = false
+        }
+      }, CHUNK_MS)
+    }
+
+    // Diarization (doctor audio only)
+    diarizeIntervalRef.current = setInterval(() => {
+      requestDiarize(segmentsRef.current)
+    }, DIARIZE_MS)
+
+    // Incremental field extraction
+    extractIntervalRef.current = setInterval(runExtract, EXTRACT_MS)
+  }, [sendChunk, requestDiarize, runExtract, opts.patientDeviceId, doctorRec, patientRec])
+
+  // ── Helper: clear all polling intervals ───────────────────────────────────────
+  const _clearIntervals = useCallback(() => {
+    if (chunkIntervalRef.current)   clearInterval(chunkIntervalRef.current)
+    if (patientIntervalRef.current) clearInterval(patientIntervalRef.current)
+    if (diarizeIntervalRef.current) clearInterval(diarizeIntervalRef.current)
+    if (extractIntervalRef.current) clearInterval(extractIntervalRef.current)
+    chunkIntervalRef.current   = null
+    patientIntervalRef.current = null
+    diarizeIntervalRef.current = null
+    extractIntervalRef.current = null
+  }, [])
+
+  // ── Start ─────────────────────────────────────────────────────────────────────
+  const startSession = useCallback(async (overrideSessionId?: string): Promise<string | null> => {
+    connect()
+
+    // Create server-side session (DB row + audio accumulation slot),
+    // unless a pre-created session ID is provided (continuation mode).
+    let id: string | null = overrideSessionId ?? null
+    if (!id) {
+      try {
+        const token   = localStorage.getItem('jwt_token')
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+        if (token) headers['Authorization'] = `Bearer ${token}`
+        const res  = await fetch(`${API_BASE()}/api/session/start`, { method: 'POST', headers })
+        const json = await res.json() as { session_id?: string }
+        id = json.session_id ?? null
+      } catch { /* session ID is optional — transcription works without it */ }
     }
 
     setSessionId(id)
     sessionIdRef.current    = id
     detectedLangRef.current = 'Unknown'
     timeOffsetRef.current   = 0
+    setLiveFields({})
+    drChunkBusyRef.current  = false
+    ptChunkBusyRef.current  = false
 
-    // Join the session room so the server can target pushes at us
     if (id) {
-      // Small delay to ensure connection is ready
       setTimeout(() => {
         socketRef.current?.emit('join_session', { session_id: id })
       }, 200)
     }
 
-    reset()
-    await start()
+    // Start doctor recorder (always)
+    doctorRec.reset()
+    await doctorRec.start(opts.doctorDeviceId)
+
+    // Start patient recorder (dual-mic only)
+    if (opts.patientDeviceId) {
+      patientRec.reset()
+      await patientRec.start(opts.patientDeviceId)
+    }
+
     setActive(true)
     setPaused(false)
-
-    // ── Chunk loop ───────────────────────────────────────────────────────────
-    chunkIntervalRef.current = setInterval(async () => {
-      const blob = await takeChunk()
-      if (blob) sendChunk(blob)
-    }, CHUNK_MS)
-
-    // ── Diarization loop ─────────────────────────────────────────────────────
-    diarizeIntervalRef.current = setInterval(() => {
-      requestDiarize(segmentsRef.current)
-    }, DIARIZE_MS)
+    _startIntervals()
 
     return id
-  }, [connect, reset, start, takeChunk, sendChunk, requestDiarize])
+  }, [connect, doctorRec, patientRec, opts.doctorDeviceId, opts.patientDeviceId, _startIntervals])
 
-  // ── Pause ──────────────────────────────────────────────────────────────────
+  // ── Pause ─────────────────────────────────────────────────────────────────────
   const pauseSession = useCallback(() => {
-    if (chunkIntervalRef.current)  clearInterval(chunkIntervalRef.current)
-    if (diarizeIntervalRef.current) clearInterval(diarizeIntervalRef.current)
-    stop()
+    _clearIntervals()
+    doctorRec.stop()
+    if (opts.patientDeviceId) patientRec.stop()
     setPaused(true)
-  }, [stop])
+  }, [_clearIntervals, doctorRec, patientRec, opts.patientDeviceId])
 
-  // ── Resume ─────────────────────────────────────────────────────────────────
+  // ── Resume ─────────────────────────────────────────────────────────────────────
   const resumeSession = useCallback(async () => {
-    reset()
-    await start()
+    drChunkBusyRef.current = false
+    ptChunkBusyRef.current = false
+    doctorRec.reset()
+    await doctorRec.start(opts.doctorDeviceId)
+    if (opts.patientDeviceId) {
+      patientRec.reset()
+      await patientRec.start(opts.patientDeviceId)
+    }
     setPaused(false)
+    _startIntervals()
+  }, [doctorRec, patientRec, opts.doctorDeviceId, opts.patientDeviceId, _startIntervals])
 
-    chunkIntervalRef.current = setInterval(async () => {
-      const blob = await takeChunk()
-      if (blob) sendChunk(blob)
-    }, CHUNK_MS)
-
-    diarizeIntervalRef.current = setInterval(() => {
-      requestDiarize(segmentsRef.current)
-    }, DIARIZE_MS)
-  }, [reset, start, takeChunk, sendChunk, requestDiarize])
-
-  // ── Stop ───────────────────────────────────────────────────────────────────
+  // ── Stop ──────────────────────────────────────────────────────────────────────
   const stopSession = useCallback(() => {
-    if (chunkIntervalRef.current)  clearInterval(chunkIntervalRef.current)
-    if (diarizeIntervalRef.current) clearInterval(diarizeIntervalRef.current)
-    chunkIntervalRef.current   = null
-    diarizeIntervalRef.current = null
-    stop()
+    _clearIntervals()
+    doctorRec.stop()
+    if (opts.patientDeviceId) patientRec.stop()
     setActive(false)
     setPaused(false)
-  }, [stop])
+  }, [_clearIntervals, doctorRec, patientRec, opts.patientDeviceId])
 
-  // ── Final chunk when recording stops ─────────────────────────────────────
+  // ── Final chunk + extract when doctor recording stops ─────────────────────────
+  // Sends whatever was recorded since the last takeChunk() cycle as the final blob.
   useEffect(() => {
-    if (recording || !chunks.length) return
-    const sendFinalAndDiarize = async () => {
-      const blob = getBlob('audio/webm')
-      if (blob && blob.size >= 500) {
-        await sendChunk(blob, true)
-      }
-      // One final diarization pass over all segments
+    if (doctorRec.recording || !doctorRec.chunks.length) return
+    const finish = async () => {
+      const blob = doctorRec.getBlob()
+      if (blob && blob.size >= 500) await sendChunk(blob, true)
       requestDiarize(segmentsRef.current)
+      await runExtract()   // final extraction pass
     }
-    sendFinalAndDiarize()
-  }, [recording, chunks, getBlob, sendChunk, requestDiarize])
+    finish()
+  }, [doctorRec.recording, doctorRec.chunks])  // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Keep segmentsRef in sync from outside via setSegmentsRef
+  // Keep segmentsRef in sync for diarize / extract calls
   const setSegmentsRef = useCallback((segs: Segment[]) => {
     segmentsRef.current = segs
   }, [])
 
   return {
-    // state
+    // State
     connected,
     sessionId,
     active,
     paused,
-    recording,
-    permissionError,
+    liveFields,
+    recording:       doctorRec.recording,
+    permissionError: doctorRec.permissionError,
     detectedLanguage: () => detectedLangRef.current,
-    // actions
+    // Actions
     startSession,
     pauseSession,
     resumeSession,
     stopSession,
     setSegmentsRef,
     requestDiarize,
-    // for audio upload after save
-    getBlob,
-    chunks,
+    // Audio (doctor recorder)
+    getBlob: doctorRec.getBlob,
+    chunks:  doctorRec.chunks,
   }
 }

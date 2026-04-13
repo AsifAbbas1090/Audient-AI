@@ -47,9 +47,12 @@ export async function login(email: string, password: string): Promise<AuthUser> 
 
 export async function logout(): Promise<void> {
   try {
-    await api.post('/api/auth/logout')
+    // POST with credentials so the server can clear the httpOnly refresh cookie
+    // and bump token_version. Optional_auth on the server means this works even
+    // when the access token has already expired.
+    await api.post('/api/auth/logout', {}, { withCredentials: true })
   } catch {
-    // Even if the request fails, clear local state
+    // Even if the request fails, clear local state so the user is logged out
   } finally {
     localStorage.removeItem('jwt_token')
     localStorage.removeItem('auth')

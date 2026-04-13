@@ -46,7 +46,8 @@ interface SummaryFields {
 }
 
 interface Summary extends SummaryFields {
-  field_reminders: FieldReminder[]
+  field_reminders:      FieldReminder[]
+  follow_up_questions?: string[]
 }
 
 interface Recommendations {
@@ -75,6 +76,7 @@ interface Conversation {
   created_at:  string
   approved_at: string | null
   patient_id:  string | null
+  parent_id?:  string | null
   patient?:    Patient | null
   transcript?: {
     raw_text:   string | null
@@ -375,6 +377,47 @@ export default function SessionDetailPage() {
     URL.revokeObjectURL(url)
   }
 
+  // ── PDF export ────────────────────────────────────────────
+  const [exportingPdf, setExportingPdf] = useState(false)
+
+  const handleExportPdf = async () => {
+    if (!conv || exportingPdf) return
+    setExportingPdf(true)
+    try {
+      // Stream the PDF as a blob and trigger browser download
+      const res = await api.get(`/api/conversations/${conv.id}/export/pdf`, {
+        responseType: 'blob',
+      })
+      const url  = URL.createObjectURL(res.data as Blob)
+      const a    = document.createElement('a')
+      a.href     = url
+      a.download = `clinical_note_${id?.slice(0, 8)}.pdf`
+      a.click()
+      URL.revokeObjectURL(url)
+      toast('PDF exported', 'success')
+    } catch {
+      toast('Could not generate PDF', 'error')
+    } finally {
+      setExportingPdf(false)
+    }
+  }
+
+  // ── Continue session ─────────────────────────────────────
+  const [continuingSession, setContinuingSession] = useState(false)
+
+  const handleContinueSession = async () => {
+    if (!conv || continuingSession) return
+    setContinuingSession(true)
+    try {
+      const res = await api.post<{ session_id: string }>(`/api/conversations/${conv.id}/continue`)
+      navigate(`/live?continue=${res.data.session_id}&parent=${conv.id}`)
+    } catch {
+      toast('Could not start continuation session', 'error')
+    } finally {
+      setContinuingSession(false)
+    }
+  }
+
   // ── Loading ───────────────────────────────────────────────
   if (loading) {
     return (
@@ -516,8 +559,34 @@ export default function SessionDetailPage() {
 
             <Button variant="secondary" size="sm" onClick={handleExport}>
               <Download size={13} />
-              Export
+              TXT
             </Button>
+
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={handleExportPdf}
+              disabled={exportingPdf}
+            >
+              {exportingPdf
+                ? <Loader2 size={13} className="animate-spin" />
+                : <FileText size={13} />}
+              PDF
+            </Button>
+
+            {conv.status === 'complete' || conv.status === 'approved' ? (
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={handleContinueSession}
+                disabled={continuingSession}
+              >
+                {continuingSession
+                  ? <Loader2 size={13} className="animate-spin" />
+                  : <RefreshCw size={13} />}
+                Continue Session
+              </Button>
+            ) : null}
           </div>
         </header>
 
@@ -924,6 +993,45 @@ export default function SessionDetailPage() {
                         Fill missing fields via Edit, then alerts will clear automatically.
                       </p>
                     )}
+                  </Card>
+                )
+              })()}
+
+              {/* Follow-up questions card */}
+              {(() => {
+                const questions = summary?.follow_up_questions ?? []
+                if (!questions.length) return null
+                return (
+                  <Card variant="elevated" className="p-5">
+                    <div className="flex items-center gap-2 mb-3">
+                      <Sparkles size={14} className="text-violet-400" />
+                      <h2 className="font-semibold text-white text-sm">Follow-up Questions</h2>
+                      <span className="ml-auto text-[10px] bg-violet-500/15 text-violet-300 border border-violet-500/25 rounded-full px-2 py-0.5 font-medium">
+                        {questions.length} suggested
+                      </span>
+                    </div>
+                    <ol className="space-y-2">
+                      {questions.map((q, i) => (
+                        <li key={i} className="flex gap-2 text-xs text-slate-300">
+                          <span className="mt-0.5 shrink-0 h-4 w-4 rounded-full bg-violet-500/20 border border-violet-500/30 flex items-center justify-center text-[9px] font-bold text-violet-400">
+                            {i + 1}
+                          </span>
+                          <span className="leading-relaxed">{q}</span>
+                        </li>
+                      ))}
+                    </ol>
+                    {conv.status === 'complete' || conv.status === 'approved' ? (
+                      <button
+                        onClick={handleContinueSession}
+                        disabled={continuingSession}
+                        className="mt-4 w-full flex items-center justify-center gap-2 text-xs font-medium text-violet-300 border border-violet-500/30 bg-violet-500/10 hover:bg-violet-500/20 rounded-xl py-2 transition-colors disabled:opacity-50"
+                      >
+                        {continuingSession
+                          ? <Loader2 size={12} className="animate-spin" />
+                          : <RefreshCw size={12} />}
+                        Start follow-up session
+                      </button>
+                    ) : null}
                   </Card>
                 )
               })()}

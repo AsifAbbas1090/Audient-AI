@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { useNavigate }       from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Square, Clock, Download, Trash2, CheckCircle2,
   Mic, MicOff, Wifi, WifiOff, Loader2, AlertCircle,
+  ChevronDown, Stethoscope, User, RefreshCw,
 } from 'lucide-react'
 import { Sidebar }       from '../components/ui/Sidebar'
 import { Badge }         from '../components/ui/Badge'
@@ -12,27 +13,27 @@ import { Waveform }      from '../components/visual/Waveform'
 import { RecordButton }  from '../components/visual/RecordButton'
 import { SpeakerBubble } from '../components/visual/SpeakerBubble'
 import { useVoiceCommands }  from '../hooks/useVoiceCommands'
-import { useLiveSession, type Segment } from '../hooks/useLiveSession'
+import { useLiveSession, type Segment, type LiveFields } from '../hooks/useLiveSession'
 import { useToast }          from '../components/ui/Toaster'
 import api from '../lib/api'
 
-// ── Constants ────────────────────────────────────────────────────────────────
-const POLL_MS = 2_000   // status poll interval after /complete
+// ── Constants ─────────────────────────────────────────────────────────────────
+const POLL_MS = 2_000
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 function formatTime(sec: number): string {
   const m = Math.floor(sec / 60).toString().padStart(2, '0')
   const s = Math.floor(sec % 60).toString().padStart(2, '0')
   return `${m}:${s}`
 }
 
-// ── Processing progress steps ─────────────────────────────────────────────────
+// ── Processing overlay ────────────────────────────────────────────────────────
 const PROGRESS_STEPS = [
-  { label: 'Saving transcript',            pct: 20 },
-  { label: 'Labelling speakers…',          pct: 45 },
-  { label: 'Extracting medical fields…',   pct: 70 },
-  { label: 'Generating field alerts…',     pct: 90 },
-  { label: 'Done',                         pct: 100 },
+  { label: 'Saving transcript',          pct: 20  },
+  { label: 'Labelling speakers…',        pct: 45  },
+  { label: 'Extracting medical fields…', pct: 70  },
+  { label: 'Generating field alerts…',   pct: 90  },
+  { label: 'Done',                       pct: 100 },
 ]
 
 function ProcessingOverlay({ step }: { step: number }) {
@@ -43,8 +44,6 @@ function ProcessingOverlay({ step }: { step: number }) {
         <Loader2 size={40} className="mx-auto text-brand-400 animate-spin mb-5" />
         <h2 className="text-white font-semibold text-lg mb-1">Processing Session</h2>
         <p className="text-slate-400 text-sm mb-6">{current.label}</p>
-
-        {/* Progress bar */}
         <div className="h-1.5 w-full bg-white/10 rounded-full overflow-hidden">
           <div
             className="h-full bg-brand-500 rounded-full transition-all duration-700"
@@ -59,36 +58,159 @@ function ProcessingOverlay({ step }: { step: number }) {
   )
 }
 
-// ── Page ─────────────────────────────────────────────────────────────────────
+// ── Device selector ───────────────────────────────────────────────────────────
+type AudioDevice = { deviceId: string; label: string }
+
+function DeviceSelect({
+  icon,
+  label,
+  devices,
+  value,
+  onChange,
+  placeholder,
+}: {
+  icon:        React.ReactNode
+  label:       string
+  devices:     AudioDevice[]
+  value:       string
+  onChange:    (id: string) => void
+  placeholder: string
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <label className="text-xs text-slate-400 flex items-center gap-1.5">
+        {icon}
+        {label}
+      </label>
+      <div className="relative">
+        <select
+          value={value}
+          onChange={e => onChange(e.target.value)}
+          className="w-full appearance-none bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs text-slate-200 pr-7 focus:outline-none focus:border-brand-500/50"
+        >
+          <option value="">{placeholder}</option>
+          {devices.map(d => (
+            <option key={d.deviceId} value={d.deviceId}>
+              {d.label || `Microphone (${d.deviceId.slice(0, 8)})`}
+            </option>
+          ))}
+        </select>
+        <ChevronDown size={12} className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500" />
+      </div>
+    </div>
+  )
+}
+
+// ── Live fields preview ────────────────────────────────────────────────────────
+const FIELD_LABELS: Record<string, string> = {
+  Name:            'Patient',
+  Age:             'Age',
+  Gender:          'Gender',
+  Disease:         'Condition',
+  Education:       'Education',
+  EmotionalState:  'Mood',
+  AdditionalNotes: 'Notes',
+}
+
+function LiveFieldsPanel({ fields }: { fields: LiveFields }) {
+  const entries = Object.entries(FIELD_LABELS)
+    .map(([key, label]) => ({ key, label, value: fields[key] as string | null | undefined }))
+    .filter(e => e.value && e.value !== 'null')
+
+  if (entries.length === 0) return null
+
+  return (
+    <Card variant="elevated" className="p-4">
+      <div className="flex items-center gap-2 mb-3">
+        <Stethoscope size={13} className="text-brand-400" />
+        <h3 className="text-xs font-semibold text-white uppercase tracking-wide">Live Extraction</h3>
+        <Badge variant="processing" dot className="ml-auto text-[10px] px-1.5 py-0.5">Live</Badge>
+      </div>
+      <div className="space-y-2">
+        {entries.map(({ key, label, value }) => (
+          <div key={key} className="flex items-start gap-2">
+            <span className="text-[10px] text-slate-500 w-16 shrink-0 pt-0.5">{label}</span>
+            <span className="text-[11px] text-slate-200 leading-tight break-words min-w-0">{value}</span>
+          </div>
+        ))}
+      </div>
+    </Card>
+  )
+}
+
+// ── Page ──────────────────────────────────────────────────────────────────────
 export default function LiveSessionPage() {
-  const navigate = useNavigate()
-  const toast    = useToast()
+  const navigate       = useNavigate()
+  const [searchParams] = useSearchParams()
+  const toast          = useToast()
 
-  const [segments,      setSegments]      = useState<Segment[]>([])
-  const [elapsed,       setElapsed]       = useState(0)
-  const [processing,    setProcessing]    = useState(false)  // chunk being transcribed
-  const [saving,        setSaving]        = useState(false)  // /complete called, polling
-  const [progressStep,  setProgressStep]  = useState(0)      // 0-4 index into PROGRESS_STEPS
-  const [savedId,       setSavedId]       = useState<string | null>(null)
-  const [statusMsg,     setStatusMsg]     = useState<string | null>(null)
+  // Continuation mode: /live?continue=<newSessionId>&parent=<parentId>
+  // The new conversation was already created server-side by /continue.
+  // We start recording into it straight away.
+  const continueSessionId = searchParams.get('continue')  // pre-created conv id
+  const parentSessionId   = searchParams.get('parent')    // original session id
 
-  const timerRef       = useRef<ReturnType<typeof setInterval> | null>(null)
-  const pollRef        = useRef<ReturnType<typeof setInterval> | null>(null)
-  const savedIdRef     = useRef<string | null>(null)  // for poll closure
-  const elapsedRef     = useRef(0)
-  const bottomRef      = useRef<HTMLDivElement>(null)
-  const isSavingRef    = useRef(false)   // guard against double-save
+  const [segments,     setSegments]     = useState<Segment[]>([])
+  const [elapsed,      setElapsed]      = useState(0)
+  const [processing,   setProcessing]   = useState(false)
+  const [saving,       setSaving]       = useState(false)
+  const [progressStep, setProgressStep] = useState(0)
+  const [savedId,      setSavedId]      = useState<string | null>(null)
+  const [statusMsg,    setStatusMsg]    = useState<string | null>(null)
+  const [parentTitle,  setParentTitle]  = useState<string | null>(null)
 
-  // Keep refs in sync
-  useEffect(() => { elapsedRef.current = elapsed }, [elapsed])
+  // ── Device selection ────────────────────────────────────────────────────────
+  const [audioDevices,     setAudioDevices]     = useState<AudioDevice[]>([])
+  const [doctorDeviceId,   setDoctorDeviceId]   = useState('')
+  const [patientDeviceId,  setPatientDeviceId]  = useState('')
 
-  // Auto-scroll transcript
+  // Enumerate audio input devices on mount (requires permission prompt first)
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [segments])
+    navigator.mediaDevices?.enumerateDevices()
+      .then(devs => {
+        const inputs = devs
+          .filter(d => d.kind === 'audioinput')
+          .map(d => ({ deviceId: d.deviceId, label: d.label }))
+        setAudioDevices(inputs)
+      })
+      .catch(() => { /* permissions not granted yet — populated after start */ })
+  }, [])
 
-  // ── WebSocket session hook ─────────────────────────────────────────────────
+  // Re-enumerate after first mic permission is granted
+  const refreshDevices = useCallback(() => {
+    navigator.mediaDevices?.enumerateDevices()
+      .then(devs => {
+        const inputs = devs
+          .filter(d => d.kind === 'audioinput')
+          .map(d => ({ deviceId: d.deviceId, label: d.label }))
+        setAudioDevices(inputs)
+      })
+      .catch(() => {})
+  }, [])
+
+  const timerRef    = useRef<ReturnType<typeof setInterval> | null>(null)
+  const pollRef     = useRef<ReturnType<typeof setInterval> | null>(null)
+  const savedIdRef  = useRef<string | null>(null)
+  const elapsedRef  = useRef(0)
+  const bottomRef   = useRef<HTMLDivElement>(null)
+  const isSavingRef = useRef(false)
+
+  useEffect(() => { elapsedRef.current = elapsed }, [elapsed])
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [segments])
+
+  // Load parent session title when in continuation mode
+  useEffect(() => {
+    if (!parentSessionId) return
+    api.get<{ conversation: { title: string | null } }>(`/api/conversations/${parentSessionId}`)
+      .then(r => setParentTitle(r.data.conversation.title))
+      .catch(() => {})
+  }, [parentSessionId])
+
+  // ── Live session hook ────────────────────────────────────────────────────────
   const session = useLiveSession({
+    doctorDeviceId:  doctorDeviceId  || undefined,
+    patientDeviceId: patientDeviceId || undefined,
+
     onTranscriptUpdate: useCallback((newSegs: Segment[]) => {
       setProcessing(false)
       setSegments(prev => {
@@ -99,7 +221,6 @@ export default function LiveSessionPage() {
     }, []),  // eslint-disable-line react-hooks/exhaustive-deps
 
     onDiarizeUpdate: useCallback((rawSegs) => {
-      // rawSegs is the full re-labeled list — map speaker labels back
       setSegments(prev => {
         let idx = 0
         return prev.map(seg => {
@@ -107,7 +228,7 @@ export default function LiveSessionPage() {
           const labeled = rawSegs[idx]
           if (!labeled) return seg
           idx++
-          return { ...seg, speaker: labeled.speaker || seg.speaker }
+          return { ...seg, speaker: labeled.speaker ?? seg.speaker }
         })
       })
     }, []),
@@ -124,7 +245,8 @@ export default function LiveSessionPage() {
 
   const {
     connected, sessionId, active, paused, recording,
-    permissionError, startSession, pauseSession, resumeSession, stopSession,
+    permissionError, liveFields,
+    startSession, pauseSession, resumeSession, stopSession,
     getBlob, chunks,
   } = session
 
@@ -138,52 +260,35 @@ export default function LiveSessionPage() {
     return () => { if (timerRef.current) clearInterval(timerRef.current) }
   }, [active, paused])
 
-  // ── Processing flag when chunks are in-flight ──────────────────────────────
+  // Processing indicator while chunks in-flight
   useEffect(() => {
     if (active && !paused) setProcessing(true)
   }, [segments.length])  // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Auto-save when recording ends ─────────────────────────────────────────
+  // Auto-save when session ends
   useEffect(() => {
-    if (
-      !active        &&
-      !recording     &&
-      segments.length > 0 &&
-      sessionId      &&
-      !isSavingRef.current
-    ) {
+    if (!active && !recording && segments.length > 0 && sessionId && !isSavingRef.current) {
       isSavingRef.current = true
       saveSession(sessionId)
     }
   }, [active, recording, segments])  // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Save session ───────────────────────────────────────────────────────────
+  // ── Save session ────────────────────────────────────────────────────────────
   async function saveSession(convId: string) {
     setSaving(true)
     setProgressStep(0)
-
     try {
-      // Step 1 visual — immediately show progress
       setProgressStep(1)
-
       const payload = {
-        segments: segments.map(s => ({
-          speaker: s.speaker,
-          text:    s.text,
-          start:   s.start,
-          end:     s.end,
-        })),
+        segments: segments.map(s => ({ speaker: s.speaker, text: s.text, start: s.start, end: s.end })),
         duration: elapsedRef.current,
         language: session.detectedLanguage(),
       }
-
-      // POST /complete — returns 202 immediately, task runs in background
-      const res = await api.post(`/api/conversations/${convId}/complete`, payload)
+      const res     = await api.post(`/api/conversations/${convId}/complete`, payload)
       const convId2 = res.data.conversation_id ?? convId
       savedIdRef.current = convId2
       setSavedId(convId2)
 
-      // Upload audio in background (non-blocking, non-critical)
       const blob = getBlob('audio/webm')
       if (blob && blob.size >= 500) {
         const form = new FormData()
@@ -193,10 +298,8 @@ export default function LiveSessionPage() {
         }).catch(() => {})
       }
 
-      // Poll /status until "complete" or "failed"
       setProgressStep(2)
       await pollUntilDone(convId2)
-
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })
         ?.response?.data?.error ?? 'Could not save session'
@@ -210,84 +313,59 @@ export default function LiveSessionPage() {
     let step = 2
     pollRef.current = setInterval(async () => {
       try {
-        const r = await api.get(`/api/conversations/${convId}/status`)
+        const r      = await api.get(`/api/conversations/${convId}/status`)
         const status = r.data?.status
-
-        // Simulate progress steps while polling
         step = Math.min(step + 1, PROGRESS_STEPS.length - 2)
         setProgressStep(step)
-
         if (status === 'complete' || status === 'approved') {
           clearInterval(pollRef.current!)
           setProgressStep(PROGRESS_STEPS.length - 1)
           setSaving(false)
           toast('Session saved — opening record…', 'success')
-          // Brief pause so user sees "Done" state
           setTimeout(() => navigate(`/session/${convId}`), 800)
         } else if (status === 'failed') {
           clearInterval(pollRef.current!)
           setSaving(false)
           isSavingRef.current = false
-          toast('Processing failed — transcript is still visible above', 'error')
+          toast('Processing failed — transcript still visible above', 'error')
         }
-      } catch {
-        // Transient network error — keep polling
-      }
+      } catch { /* transient error — keep polling */ }
     }, POLL_MS)
   }
 
-  // Cleanup poll on unmount
   useEffect(() => {
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current)
-    }
+    return () => { if (pollRef.current) clearInterval(pollRef.current) }
   }, [])
 
-  // ── Actions ────────────────────────────────────────────────────────────────
+  // ── Actions ─────────────────────────────────────────────────────────────────
   const handleStart = useCallback(async () => {
     isSavingRef.current = false
     setSavedId(null)
     setSegments([])
     setElapsed(0)
     setStatusMsg(null)
-    await startSession()
-    toast('Session started — recording', 'success')
-  }, [startSession, toast])
+    // In continuation mode pass the pre-created session ID so the hook
+    // skips the /api/session/start call and uses the existing conversation.
+    await startSession(continueSessionId ?? undefined)
+    refreshDevices()   // labels appear after permission is granted
+    toast(continueSessionId ? 'Follow-up session started' : 'Session started — recording', 'success')
+  }, [startSession, continueSessionId, toast, refreshDevices])
 
-  const handlePause = useCallback(() => {
-    pauseSession()
-    toast('Recording paused', 'info')
-  }, [pauseSession, toast])
-
-  const handleResume = useCallback(async () => {
-    await resumeSession()
-    toast('Recording resumed', 'info')
-  }, [resumeSession, toast])
-
-  const handleStop = useCallback(() => {
-    stopSession()
-    toast('Session ended — saving…', 'info')
-  }, [stopSession, toast])
+  const handlePause  = useCallback(() => { pauseSession();           toast('Recording paused', 'info') }, [pauseSession, toast])
+  const handleResume = useCallback(async () => { await resumeSession(); toast('Recording resumed', 'info') }, [resumeSession, toast])
+  const handleStop   = useCallback(() => { stopSession();             toast('Session ended — saving…', 'info') }, [stopSession, toast])
 
   const handleClear = useCallback(() => {
-    setSegments([])
-    setStatusMsg(null)
-    setElapsed(0)
-    setSavedId(null)
-    isSavingRef.current = false
+    setSegments([]); setStatusMsg(null); setElapsed(0); setSavedId(null); isSavingRef.current = false
   }, [])
 
   const handleToggle = useCallback(async () => {
-    if (!active) {
-      await handleStart()
-    } else if (!paused) {
-      handlePause()
-    } else {
-      await handleResume()
-    }
+    if (!active)       await handleStart()
+    else if (!paused)  handlePause()
+    else               await handleResume()
   }, [active, paused, handleStart, handlePause, handleResume])
 
-  // ── Voice commands ─────────────────────────────────────────────────────────
+  // ── Voice commands ───────────────────────────────────────────────────────────
   const { listening, lastCommand, supported: voiceSupported, startListening, stopListening } =
     useVoiceCommands({
       onStart:  () => { if (!active) handleStart() },
@@ -298,25 +376,20 @@ export default function LiveSessionPage() {
     })
 
   function toggleVoice() {
-    if (listening) {
-      stopListening()
-      toast('Voice commands off', 'info')
-    } else {
-      startListening()
-      toast('Voice commands on — say "start", "stop", "pause", "resume", or "clear"', 'info')
-    }
+    if (listening) { stopListening(); toast('Voice commands off', 'info') }
+    else           { startListening(); toast('Voice commands on — say "start", "stop", "pause", "resume", or "clear"', 'info') }
   }
 
   const handleExport = () => {
     const text = segments.map(s => `[${s.speaker}] ${s.text}`).join('\n')
-    const blob  = new Blob([text], { type: 'text/plain' })
-    const url   = URL.createObjectURL(blob)
-    const a     = document.createElement('a')
+    const blob = new Blob([text], { type: 'text/plain' })
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement('a')
     a.href = url; a.download = `transcript-${Date.now()}.txt`; a.click()
     URL.revokeObjectURL(url)
   }
 
-  // ── Derived state ──────────────────────────────────────────────────────────
+  // ── Derived state ────────────────────────────────────────────────────────────
   const recordState = saving
     ? 'processing'
     : active && !paused ? 'recording'
@@ -325,39 +398,55 @@ export default function LiveSessionPage() {
 
   const speakerSet = [...new Set(segments.map(s => s.speaker))]
   const wordCount  = segments.reduce((n, s) => n + s.text.split(/\s+/).length, 0)
+  const hasLiveFields = Object.values(liveFields).some(v => v && v !== 'null')
 
-  // ── Render ─────────────────────────────────────────────────────────────────
+  // ── Render ───────────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen flex bg-surface-400">
       <Sidebar />
-
-      {/* Processing overlay */}
       {saving && <ProcessingOverlay step={progressStep} />}
 
       <main className="flex-1 overflow-hidden flex flex-col">
 
-        {/* ── Top bar ───────────────────────────────────────────────────── */}
+        {/* ── Continuation banner ─────────────────────────────────────────── */}
+        {continueSessionId && (
+          <div className="shrink-0 flex items-center gap-2 px-6 py-2.5 bg-violet-500/10 border-b border-violet-500/20 text-xs text-violet-300">
+            <RefreshCw size={12} className="shrink-0" />
+            <span>
+              Follow-up session
+              {parentTitle ? <> — continuing <strong className="text-violet-200">"{parentTitle}"</strong></> : null}
+            </span>
+            {parentSessionId && (
+              <button
+                onClick={() => navigate(`/sessions/${parentSessionId}`)}
+                className="ml-auto underline hover:text-violet-100 transition-colors"
+              >
+                View original
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* ── Top bar ─────────────────────────────────────────────────────── */}
         <header className="shrink-0 border-b border-white/8 px-6 py-4 flex items-center justify-between gap-4">
           <div>
-            <h1 className="font-display font-bold text-lg text-white">Live Session</h1>
+            <h1 className="font-display font-bold text-lg text-white">
+              {continueSessionId ? 'Follow-up Session' : 'Live Session'}
+            </h1>
             <p className="text-xs text-slate-500 mt-0.5">WebSocket · Any language → English · AI diarization</p>
           </div>
 
           <div className="flex items-center gap-2 flex-wrap justify-end">
-            {/* Session state badges */}
             {active && !paused && <Badge variant="success"    dot>Recording</Badge>}
             {active &&  paused && <Badge variant="warning"    dot>Paused</Badge>}
             {saving            && <Badge variant="processing" dot>Processing…</Badge>}
             {savedId && !saving && (
-              <Badge variant="success">
-                <CheckCircle2 size={11} className="mr-1" /> Saved
-              </Badge>
+              <Badge variant="success"><CheckCircle2 size={11} className="mr-1" /> Saved</Badge>
             )}
             {!active && !savedId && segments.length > 0 && (
               <Badge variant="default">Session ended</Badge>
             )}
 
-            {/* Timer */}
             {active && (
               <div className="flex items-center gap-1.5 text-sm text-slate-400">
                 <Clock size={13} />
@@ -365,13 +454,11 @@ export default function LiveSessionPage() {
               </div>
             )}
 
-            {/* WebSocket status indicator */}
             <div className={`flex items-center gap-1.5 text-xs ${connected ? 'text-emerald-400' : 'text-slate-500'}`}>
               {connected ? <Wifi size={12} /> : <WifiOff size={12} />}
               {connected ? 'Live' : 'Connecting…'}
             </div>
 
-            {/* Voice commands toggle */}
             {voiceSupported && (
               <button
                 onClick={toggleVoice}
@@ -389,7 +476,6 @@ export default function LiveSessionPage() {
           </div>
         </header>
 
-        {/* Voice command flash */}
         {lastCommand && (
           <div className="shrink-0 flex justify-center py-2 pointer-events-none">
             <div className="flex items-center gap-2 bg-brand-500/20 border border-brand-500/30 text-brand-200 text-sm font-medium px-4 py-2 rounded-full shadow-lg">
@@ -399,10 +485,10 @@ export default function LiveSessionPage() {
           </div>
         )}
 
-        {/* ── Body ──────────────────────────────────────────────────────── */}
+        {/* ── Body ────────────────────────────────────────────────────────── */}
         <div className="flex-1 overflow-hidden flex gap-6 p-6">
 
-          {/* ── Left: controls + transcript ──────────────────────────── */}
+          {/* ── Left: controls + transcript ────────────────────────────── */}
           <div className="flex-1 flex flex-col gap-4 min-w-0">
 
             {/* Controls */}
@@ -418,7 +504,28 @@ export default function LiveSessionPage() {
                   </Button>
                 )}
 
-                {/* Errors */}
+                {/* Device selectors — visible only before recording starts */}
+                {!active && !saving && (
+                  <div className="w-full grid grid-cols-2 gap-3 pt-2 border-t border-white/6">
+                    <DeviceSelect
+                      icon={<Mic size={10} className="text-brand-400" />}
+                      label="Doctor mic"
+                      devices={audioDevices}
+                      value={doctorDeviceId}
+                      onChange={setDoctorDeviceId}
+                      placeholder="Default microphone"
+                    />
+                    <DeviceSelect
+                      icon={<User size={10} className="text-emerald-400" />}
+                      label="Patient mic (optional)"
+                      devices={audioDevices}
+                      value={patientDeviceId}
+                      onChange={setPatientDeviceId}
+                      placeholder="None (single mic)"
+                    />
+                  </div>
+                )}
+
                 {permissionError && (
                   <p className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2.5 w-full text-center">
                     {permissionError}
@@ -430,11 +537,9 @@ export default function LiveSessionPage() {
                     {statusMsg}
                   </p>
                 )}
-
-                {/* WebSocket not connected warning */}
                 {!connected && (
                   <p className="text-xs text-slate-500 text-center">
-                    Connecting to server… transcription will begin once connected.
+                    Connecting to server… transcription begins once connected.
                   </p>
                 )}
               </div>
@@ -453,7 +558,7 @@ export default function LiveSessionPage() {
                   <div className="flex items-center gap-3">
                     {speakerSet.map(sp => (
                       <div key={sp} className="flex items-center gap-1.5">
-                        <div className={`h-2 w-2 rounded-full ${sp.includes('2') ? 'bg-emerald-400' : 'bg-brand-400'}`} />
+                        <div className={`h-2 w-2 rounded-full ${sp === 'Patient' ? 'bg-emerald-400' : sp.includes('2') ? 'bg-emerald-400' : 'bg-brand-400'}`} />
                         <span className="text-xs text-slate-500">{sp}</span>
                       </div>
                     ))}
@@ -462,18 +567,10 @@ export default function LiveSessionPage() {
 
                 {segments.length > 0 && !active && !saving && (
                   <div className="flex items-center gap-2">
-                    <button
-                      onClick={handleExport}
-                      className="p-1.5 rounded-lg text-slate-500 hover:text-brand-400 hover:bg-brand-500/10 transition-colors"
-                      title="Export transcript"
-                    >
+                    <button onClick={handleExport} className="p-1.5 rounded-lg text-slate-500 hover:text-brand-400 hover:bg-brand-500/10 transition-colors" title="Export transcript">
                       <Download size={14} />
                     </button>
-                    <button
-                      onClick={handleClear}
-                      className="p-1.5 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
-                      title="Clear"
-                    >
+                    <button onClick={handleClear} className="p-1.5 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-colors" title="Clear">
                       <Trash2 size={14} />
                     </button>
                   </div>
@@ -490,7 +587,7 @@ export default function LiveSessionPage() {
                     </p>
                     {active && !paused && (
                       <p className="text-xs text-slate-600 mt-2">
-                        Chunks sent over WebSocket → Groq Whisper → pushed back live
+                        Overlapping 6s windows → Groq Whisper → pushed back live
                       </p>
                     )}
                   </div>
@@ -509,8 +606,10 @@ export default function LiveSessionPage() {
             </Card>
           </div>
 
-          {/* ── Right: session info ────────────────────────────────────── */}
+          {/* ── Right sidebar ───────────────────────────────────────────── */}
           <div className="hidden lg:flex flex-col gap-4 w-64 shrink-0">
+
+            {/* Session info */}
             <Card variant="elevated" className="p-5 space-y-4">
               <h3 className="text-sm font-semibold text-white">Session Info</h3>
               <div className="space-y-3">
@@ -520,7 +619,8 @@ export default function LiveSessionPage() {
                   { label: 'Speakers',   value: speakerSet.length ? speakerSet.length.toString() : '—' },
                   { label: 'Words',      value: wordCount.toString() },
                   { label: 'Transport',  value: connected ? 'WebSocket' : 'Connecting…' },
-                  { label: 'Saved',      value: savedId ? 'Yes ✓' : saving ? 'Processing…' : '—' },
+                  { label: 'Dual mic',   value: patientDeviceId ? 'Yes' : 'No' },
+                  { label: 'Saved',      value: savedId ? 'Yes' : saving ? 'Processing…' : '—' },
                 ].map(item => (
                   <div key={item.label} className="flex items-center justify-between">
                     <span className="text-xs text-slate-500">{item.label}</span>
@@ -530,15 +630,18 @@ export default function LiveSessionPage() {
               </div>
             </Card>
 
+            {/* Live extraction preview — appears once AI returns first fields */}
+            {hasLiveFields && <LiveFieldsPanel fields={liveFields} />}
+
+            {/* Tips */}
             <Card variant="flat" className="p-4">
               <h3 className="text-xs font-semibold text-slate-400 mb-3 uppercase tracking-wide">Tips</h3>
               <ul className="space-y-2 text-xs text-slate-500">
-                <li>· Place the mic between both speakers</li>
-                <li>· Speak clearly with short pauses</li>
-                <li>· Transcript appears every 5 seconds</li>
+                <li>· Overlapping 6s windows prevent word cutoffs</li>
                 <li>· Speakers re-labelled every 15 seconds</li>
+                <li>· Fields extracted live every 60 seconds</li>
+                <li>· Add patient mic for better separation</li>
                 <li>· Session auto-saves when you end</li>
-                <li>· AI extraction runs in the background</li>
                 {voiceSupported && (
                   <li className="pt-1 border-t border-white/6 text-brand-400">
                     · Say "start", "stop", "pause", "resume", or "clear"
