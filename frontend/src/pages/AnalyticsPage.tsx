@@ -15,7 +15,7 @@ import api          from '../lib/api'
 interface Conv {
   id:         string
   title:      string | null
-  status:     'complete' | 'processing' | 'failed'
+  status:     'complete' | 'processing' | 'failed' | 'approved'
   language:   string | null
   duration:   number | null
   created_at: string
@@ -88,7 +88,8 @@ export default function AnalyticsPage() {
   }, [refreshKey])
 
   // ── Derived stats ────────────────────────────────────────
-  const completed   = convs.filter(c => c.status === 'complete')
+  const completed   = convs.filter(c => c.status === 'complete' || c.status === 'approved')
+  const approved    = convs.filter(c => c.status === 'approved')
   const processing  = convs.filter(c => c.status === 'processing')
   const failed      = convs.filter(c => c.status === 'failed')
   const totalDur    = completed.reduce((s, c) => s + (c.duration ?? 0), 0)
@@ -277,6 +278,7 @@ export default function AnalyticsPage() {
               ) : (
                 [
                   { label: 'Completed',  count: completed.length,  color: 'bg-emerald-500', variant: 'success'  as const },
+                  { label: 'Approved',   count: approved.length,   color: 'bg-sky-500',     variant: 'success'  as const },
                   { label: 'Processing', count: processing.length, color: 'bg-amber-500',   variant: 'warning'  as const },
                   { label: 'Failed',     count: failed.length,     color: 'bg-red-500',     variant: 'error'    as const },
                 ].map(item => {

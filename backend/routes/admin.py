@@ -25,10 +25,14 @@ def stats():
     total_users         = User.query.count()
     healthcare_users    = User.query.filter_by(role="healthcare").count()
     admin_users         = User.query.filter_by(role="admin").count()
-    total_conversations = Conversation.query.count()
-    complete            = Conversation.query.filter_by(status="complete").count()
-    processing          = Conversation.query.filter_by(status="processing").count()
-    failed              = Conversation.query.filter_by(status="failed").count()
+    from sqlalchemy import or_
+    total_conversations = Conversation.query.filter(Conversation.deleted_at.is_(None)).count()
+    complete            = Conversation.query.filter(
+                            or_(Conversation.status == "complete", Conversation.status == "approved"),
+                            Conversation.deleted_at.is_(None),
+                          ).count()
+    processing          = Conversation.query.filter_by(status="processing").filter(Conversation.deleted_at.is_(None)).count()
+    failed              = Conversation.query.filter_by(status="failed").filter(Conversation.deleted_at.is_(None)).count()
 
     return jsonify({
         "users": {

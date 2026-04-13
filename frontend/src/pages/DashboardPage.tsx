@@ -5,7 +5,7 @@ import {
   Search, Plus, Clock, Mic,
   FileText, TrendingUp, ChevronRight,
   CheckCircle2, Loader2, AlertCircle,
-  RefreshCw, Users,
+  RefreshCw, Users, ShieldCheck,
 } from 'lucide-react'
 import { Sidebar }    from '../components/ui/Sidebar'
 import { Badge }      from '../components/ui/Badge'
@@ -19,13 +19,13 @@ import api            from '../lib/api'
 interface Conv {
   id:         string
   title:      string | null
-  status:     'complete' | 'processing' | 'failed'
+  status:     'complete' | 'processing' | 'failed' | 'approved'
   language:   string | null
   duration:   number | null
   created_at: string
 }
 
-type StatusFilter = 'all' | 'complete' | 'processing' | 'failed'
+type StatusFilter = 'all' | 'complete' | 'processing' | 'failed' | 'approved'
 
 // ── Helpers ──────────────────────────────────────────────────
 function formatDuration(sec: number | null): string {
@@ -50,6 +50,7 @@ const statusConfig = {
   complete:   { badge: <Badge variant="success"    dot>Complete</Badge>,   icon: <CheckCircle2 size={12} className="text-emerald-400" /> },
   processing: { badge: <Badge variant="processing" dot>Processing</Badge>, icon: <Loader2     size={12} className="text-amber-400 animate-spin" /> },
   failed:     { badge: <Badge variant="error"      dot>Failed</Badge>,     icon: <AlertCircle size={12} className="text-red-400" /> },
+  approved:   { badge: <Badge variant="success"    dot>Approved</Badge>,   icon: <ShieldCheck size={12} className="text-emerald-400" /> },
 }
 
 // ── Session Card ─────────────────────────────────────────────
@@ -292,7 +293,7 @@ export default function DashboardPage() {
             </div>
 
             <div className="flex items-center gap-1 bg-white/4 border border-white/8 rounded-xl p-1">
-              {(['all', 'complete', 'processing', 'failed'] as StatusFilter[]).map(f => (
+              {(['all', 'complete', 'approved', 'processing', 'failed'] as StatusFilter[]).map(f => (
                 <button
                   key={f}
                   onClick={() => setStatusFilter(f)}
