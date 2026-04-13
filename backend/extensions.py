@@ -7,9 +7,16 @@ Bound to the app in app.py via the factory pattern.
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 from flask_socketio import SocketIO
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
-db   = SQLAlchemy()
-cors = CORS()
+db      = SQLAlchemy()
+cors    = CORS()
+limiter = Limiter(
+    key_func        = get_remote_address,
+    default_limits  = [],          # no global default — apply per-route only
+    storage_uri     = "memory://", # overridden to Redis in app.py when REDIS_URL is set
+)
 # async_mode='threading' — no monkey-patching required, works with all stdlib.
 # For high concurrency (100+ simultaneous doctors) switch to eventlet:
 #   pip install eventlet

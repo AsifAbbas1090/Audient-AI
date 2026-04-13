@@ -1,17 +1,22 @@
 """
 Auth routes:
-  POST /api/auth/register        — create account, returns JWT + user
-  POST /api/auth/login           — verify credentials, returns JWT + user
-  GET  /api/auth/me              — return current user from token
-  POST /api/auth/logout          — client-side only (token is stateless), returns 200
-  POST /api/auth/reset-password  — offline password reset (no email — verify by email + new password)
+  POST /api/auth/register        — create account, returns access JWT + sets refresh cookie
+  POST /api/auth/login           — verify credentials, returns access JWT + sets refresh cookie
+  GET  /api/auth/me              — return current user from access token
+  POST /api/auth/refresh         — issue new access token from httpOnly refresh cookie
+  POST /api/auth/logout          — revoke all refresh tokens (bump token_version) + clear cookie
+  POST /api/auth/reset-password  — offline password reset (no email required)
 """
-from datetime import datetime, timezone
-from flask import Blueprint, request, jsonify, g
+from datetime import datetime, timedelta, timezone
+from flask import Blueprint, request, jsonify, g, make_response
 
-from extensions import db
+from extensions import db, limiter
 from models.user import User
-from utils.auth import hash_password, verify_password, generate_token, require_auth
+from utils.auth import (
+    hash_password, verify_password,
+    generate_access_token, generate_refresh_token, decode_token,
+    require_auth, optional_auth,
+)
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/api/auth")
 
@@ -21,9 +26,28 @@ def _db_available() -> bool:
     return bool(Config.DATABASE_URL)
 
 
-# ── Register ────────────────────────────────────────────────
+def _set_refresh_cookie(response, token: str) -> None:
+    """
+    Attach an httpOnly SameSite=Lax refresh-token cookie to the response.
+    The path is scoped to /api/auth so the cookie is only sent to auth endpoints.
+    """
+    from config import Config
+    max_age = int(timedelta(days=Config.JWT_REFRESH_EXPIRY_DAYS).total_seconds())
+    response.set_cookie(
+        "refresh_token",
+        value    = token,
+        max_age  = max_age,
+        httponly = True,
+        secure   = False,           # set True in production (HTTPS only)
+        samesite = "Lax",
+        path     = "/api/auth",     # cookie is only sent to /api/auth/* paths
+    )
+
+
+# ── Register ──────────────────────────────────────────────────────────────────
 
 @auth_bp.route("/register", methods=["POST"])
+@limiter.limit("5 per minute", error_message="Too many registration attempts — please wait a minute.")
 def register():
     if not _db_available():
         return jsonify({"error": "Database not configured — set DATABASE_URL in .env"}), 503
@@ -34,10 +58,11 @@ def register():
     password = data.get("password") or ""
     role     = data.get("role", "healthcare")
 
-    # Validate
     errors = {}
-    if not name:                        errors["name"]     = "Full name is required."
-    if not email:                       errors["email"]    = "Email address is required."
+    if not name:
+        errors["name"]     = "Full name is required."
+    if not email:
+        errors["email"]    = "Email address is required."
     if not password or len(password) < 6:
         errors["password"] = "Password must be at least 6 characters."
     if role not in ("healthcare", "admin"):
@@ -45,16 +70,15 @@ def register():
     if errors:
         return jsonify({"error": "Validation failed", "fields": errors}), 422
 
-    # Duplicate check
     if User.query.filter_by(email=email).first():
         return jsonify({"error": "An account with this email already exists."}), 409
 
     try:
         user = User(
-            name=name,
-            email=email,
-            password_hash=hash_password(password),
-            role=role,
+            name          = name,
+            email         = email,
+            password_hash = hash_password(password),
+            role          = role,
         )
         db.session.add(user)
         db.session.commit()
@@ -62,13 +86,17 @@ def register():
         db.session.rollback()
         return jsonify({"error": f"Could not create account: {e}"}), 500
 
-    token = generate_token(user)
-    return jsonify({"token": token, "user": user.to_dict()}), 201
+    access  = generate_access_token(user)
+    refresh = generate_refresh_token(user)
+    resp    = make_response(jsonify({"token": access, "user": user.to_dict()}), 201)
+    _set_refresh_cookie(resp, refresh)
+    return resp
 
 
-# ── Login ────────────────────────────────────────────────────
+# ── Login ──────────────────────────────────────────────────────────────────────
 
 @auth_bp.route("/login", methods=["POST"])
+@limiter.limit("10 per minute", error_message="Too many login attempts — please wait a minute.")
 def login():
     if not _db_available():
         return jsonify({"error": "Database not configured — set DATABASE_URL in .env"}), 503
@@ -84,18 +112,60 @@ def login():
     if not user or not verify_password(password, user.password_hash):
         return jsonify({"error": "Invalid email or password."}), 401
 
-    # Update last_login_at
     try:
         user.last_login_at = datetime.now(timezone.utc)
         db.session.commit()
     except Exception:
         db.session.rollback()
 
-    token = generate_token(user)
-    return jsonify({"token": token, "user": user.to_dict()}), 200
+    access  = generate_access_token(user)
+    refresh = generate_refresh_token(user)
+    resp    = make_response(jsonify({"token": access, "user": user.to_dict()}), 200)
+    _set_refresh_cookie(resp, refresh)
+    return resp
 
 
-# ── Me ───────────────────────────────────────────────────────
+# ── Refresh ────────────────────────────────────────────────────────────────────
+
+@auth_bp.route("/refresh", methods=["POST"])
+def refresh():
+    """
+    Issue a new access token using the httpOnly refresh cookie.
+    Also rolls the refresh cookie (resets its expiry on activity).
+
+    Returns 401 if:
+      - no cookie present
+      - token is expired or forged
+      - user called /logout (token_version mismatch)
+    """
+    if not _db_available():
+        return jsonify({"error": "Database not configured"}), 503
+
+    token = request.cookies.get("refresh_token")
+    if not token:
+        return jsonify({"error": "No refresh token — please log in again"}), 401
+
+    payload = decode_token(token)
+    if not payload or payload.get("type") != "refresh":
+        return jsonify({"error": "Invalid or expired refresh token"}), 401
+
+    user = User.query.get(payload["user_id"])
+    if not user:
+        return jsonify({"error": "User not found"}), 401
+
+    # token_version check: /logout bumps this, invalidating all prior refresh tokens
+    if payload.get("token_version", 0) != user.token_version:
+        return jsonify({"error": "Session revoked — please log in again"}), 401
+
+    new_access  = generate_access_token(user)
+    new_refresh = generate_refresh_token(user)   # rolling: extends expiry on activity
+
+    resp = make_response(jsonify({"token": new_access, "user": user.to_dict()}), 200)
+    _set_refresh_cookie(resp, new_refresh)
+    return resp
+
+
+# ── Me ─────────────────────────────────────────────────────────────────────────
 
 @auth_bp.route("/me", methods=["GET"])
 @require_auth
@@ -106,26 +176,43 @@ def me():
     return jsonify({"user": user.to_dict()}), 200
 
 
-# ── Logout (stateless — client drops the token) ──────────────
+# ── Logout ─────────────────────────────────────────────────────────────────────
 
 @auth_bp.route("/logout", methods=["POST"])
+@optional_auth
 def logout():
-    # JWT is stateless — client simply discards the token.
-    # This endpoint exists so the frontend has a clean API call to make.
-    return jsonify({"message": "Logged out successfully"}), 200
+    """
+    Bump token_version (invalidates ALL outstanding refresh tokens for this user)
+    and clear the refresh cookie from the browser.
+
+    Uses @optional_auth so it succeeds even when the access token has already
+    expired — the user can always log out regardless of token state.
+    """
+    if g.user_id:
+        try:
+            user = User.query.get(g.user_id)
+            if user:
+                user.token_version = (user.token_version or 0) + 1
+                db.session.commit()
+        except Exception:
+            db.session.rollback()
+
+    resp = make_response(jsonify({"message": "Logged out successfully"}), 200)
+    resp.delete_cookie("refresh_token", path="/api/auth")
+    return resp
 
 
-# ── Password reset (offline — no email verification) ─────────
+# ── Password reset (offline — no email verification) ──────────────────────────
 
 @auth_bp.route("/reset-password", methods=["POST"])
 def reset_password():
     """
     Offline-friendly password reset.
-    No email token is needed — the user proves identity by providing
-    their registered email. Suitable for a clinic-local deployment
-    where an admin can verify the person in person.
+    No email token needed — suitable for clinic-local deployments where an
+    admin can verify the user in person.
 
     Body: { email, new_password }
+    Also bumps token_version to invalidate all existing sessions.
     """
     if not _db_available():
         return jsonify({"error": "Database not configured"}), 503
@@ -146,6 +233,7 @@ def reset_password():
 
     try:
         user.password_hash = hash_password(new_password)
+        user.token_version = (user.token_version or 0) + 1   # invalidate all sessions
         db.session.commit()
     except Exception as e:
         db.session.rollback()

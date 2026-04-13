@@ -66,7 +66,14 @@ class Config:
     # Authentication (JWT)                                                 #
     # ------------------------------------------------------------------ #
     JWT_SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "jwt-secret-change-in-production")
-    JWT_EXPIRY_DAYS: int = int(os.getenv("JWT_EXPIRY_DAYS", "7"))
+    JWT_EXPIRY_DAYS: int = int(os.getenv("JWT_EXPIRY_DAYS", "7"))   # legacy — kept for compat
+    JWT_ACCESS_EXPIRY_MINUTES: int = int(os.getenv("JWT_ACCESS_EXPIRY_MINUTES", "15"))
+    JWT_REFRESH_EXPIRY_DAYS: int   = int(os.getenv("JWT_REFRESH_EXPIRY_DAYS",  "30"))
+
+    # ------------------------------------------------------------------ #
+    # CORS                                                                  #
+    # ------------------------------------------------------------------ #
+    FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
     # ------------------------------------------------------------------ #
     # Task Queue (Celery + Redis)                                          #
@@ -75,6 +82,15 @@ class Config:
     # Free Redis: https://upstash.com  or  docker run -d -p 6379:6379 redis
     # ------------------------------------------------------------------ #
     REDIS_URL: str = os.getenv("REDIS_URL", "").strip()
+
+    # ------------------------------------------------------------------ #
+    # Email (Resend)                                                       #
+    # Get a free key at https://resend.com — 3,000 emails/month free.     #
+    # Set FROM_EMAIL to a verified sender address in your Resend account. #
+    # ------------------------------------------------------------------ #
+    RESEND_API_KEY: str = os.getenv("RESEND_API_KEY", "").strip()
+    FROM_EMAIL: str     = os.getenv("FROM_EMAIL", "Audient AI <noreply@audient.ai>").strip()
+    APP_URL: str        = os.getenv("APP_URL", "http://localhost:3000").strip()
 
     # ------------------------------------------------------------------ #
     # Server                                                               #

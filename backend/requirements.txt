@@ -32,6 +32,16 @@ soundfile
 celery[redis]>=5.3.0
 redis>=5.0.0
 
+# Rate limiting
+flask-limiter>=4.0.0
+
+# PDF export (clinical note generation)
+reportlab>=4.0.0
+
+# Email notifications (Resend API — free tier: 3,000 emails/month)
+# Get API key at https://resend.com  |  Set RESEND_API_KEY in .env
+resend>=2.0.0
+
 # Ollama fallback (offline extraction — optional)
 openai
 

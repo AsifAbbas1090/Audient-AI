@@ -82,11 +82,13 @@ def transcribe(
             or "Unknown"
         )
 
+    from services.correction_service import correct_text
+
     # Build segment list
     segments: List[Dict[str, Any]] = []
     if hasattr(response, "segments") and response.segments:
         for seg in response.segments:
-            text = (getattr(seg, "text", "") or "").strip()
+            text = correct_text((getattr(seg, "text", "") or "").strip())
             segments.append({
                 "start":   float(getattr(seg, "start", 0)),
                 "end":     float(getattr(seg, "end",   0)),
@@ -97,7 +99,7 @@ def transcribe(
     # Groq translations endpoint sometimes returns empty segments but full text
     has_text = any(s["text"] for s in segments)
     if not has_text:
-        full_text = (getattr(response, "text", "") or "").strip()
+        full_text = correct_text((getattr(response, "text", "") or "").strip())
         if full_text:
             start = segments[0]["start"] if segments else 0.0
             end   = segments[-1]["end"]  if segments else 0.0

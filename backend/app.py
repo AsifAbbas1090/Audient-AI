@@ -23,8 +23,8 @@ from config import Config
 os.environ["HF_HOME"] = Config.HF_HOME
 
 import shutil
-from flask import Flask
-from extensions import db, cors, socketio
+from flask import Flask, request
+from extensions import db, cors, socketio, limiter
 from routes import register_blueprints
 
 
@@ -36,19 +36,34 @@ def create_app() -> Flask:
 
     # ── Extensions ─────────────────────────────────────────────────────────
     db.init_app(app)
+
+    _allowed_origins = list(filter(None, {
+        Config.FRONTEND_URL,
+        "http://localhost:3000",
+        "http://localhost:5173",
+    }))
     cors.init_app(app, resources={
         r"/api/*": {
-            "origins": "*",
-            "allow_headers": ["Content-Type", "Authorization"],
-            "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-            "supports_credentials": False,
+            "origins":              _allowed_origins,
+            "allow_headers":        ["Content-Type", "Authorization"],
+            "methods":              ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+            "supports_credentials": True,
         }
     })
 
-    # Belt-and-suspenders CORS headers (catches any routes flask-cors misses)
+    # Belt-and-suspenders CORS headers (catches any routes flask-cors misses).
+    # Reflects the request Origin when it matches an allowed frontend so that
+    # Access-Control-Allow-Credentials: true is valid (wildcards are forbidden
+    # when credentials=true per the CORS spec).
     @app.after_request
     def _add_cors_headers(response):
-        response.headers["Access-Control-Allow-Origin"]  = "*"
+        origin  = request.headers.get("Origin", "")
+        allowed = {Config.FRONTEND_URL, "http://localhost:3000", "http://localhost:5173"}
+        if origin in allowed:
+            response.headers["Access-Control-Allow-Origin"]      = origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+        else:
+            response.headers.setdefault("Access-Control-Allow-Origin", "*")
         response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
         return response
@@ -56,6 +71,13 @@ def create_app() -> Flask:
     @app.route("/api/<path:_>", methods=["OPTIONS"])
     def _options_handler(_):
         return "", 200
+
+    # ── Rate Limiter ────────────────────────────────────────────────────────
+    # Use Redis when available so limits persist across restarts and are
+    # shared across multiple Flask workers.  Falls back to in-process memory.
+    if Config.REDIS_URL:
+        app.config["RATELIMIT_STORAGE_URI"] = Config.REDIS_URL
+    limiter.init_app(app)
 
     # ── SocketIO ────────────────────────────────────────────────────────────
     socketio.init_app(app)

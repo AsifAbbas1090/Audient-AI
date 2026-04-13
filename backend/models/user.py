@@ -29,6 +29,9 @@ class User(db.Model):
     process_mode  = db.Column(db.String(10),  nullable=False, default="offline")
     # process_mode: 'online' | 'offline'
 
+    # Incremented on logout to invalidate all outstanding refresh tokens.
+    token_version = db.Column(db.Integer, nullable=False, default=0)
+
     created_at    = db.Column(db.DateTime(timezone=True), default=_now)
     last_login_at = db.Column(db.DateTime(timezone=True), nullable=True)
 

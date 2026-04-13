@@ -32,8 +32,8 @@ def process_session_task(
     """
     from extensions import db
     from models.conversation import Conversation
-    from services.diarize_service import diarize_with_groq
-    from services.extract_service import extract
+    from services.diarize_service import diarize_with_groq, split_segments_by_sentence
+    from services.extract_service import extract, generate_followups
     from routes.conversations import (
         _save_transcript,
         _save_summary,
@@ -47,6 +47,9 @@ def process_session_task(
 
     try:
         # ── Step 1: diarize ──────────────────────────────────────────────
+        # Split into sentence-level segments first so the LLM has enough
+        # context lines even when Whisper returns only 1-2 large segments.
+        segments = split_segments_by_sentence(segments)
         if len(segments) >= 2:
             segments = diarize_with_groq(segments)
 
@@ -66,7 +69,8 @@ def process_session_task(
             if conv.summary:
                 db.session.delete(conv.summary)
                 db.session.flush()
-            _save_summary(conv_id, extraction)
+            followups = generate_followups(raw_text, extraction)
+            _save_summary(conv_id, extraction, followups=followups)
 
         db.session.flush()
         if conv.summary:
@@ -81,6 +85,10 @@ def process_session_task(
 
         db.session.commit()
         print(f"[task] process_session {conv_id} → complete")
+
+        # ── Step 6: email notifications (non-blocking, best-effort) ──────
+        _send_notifications(conv)
+
         return {"success": True, "conversation_id": conv_id}
 
     except Exception as exc:
@@ -93,6 +101,55 @@ def process_session_task(
             db.session.rollback()
         print(f"[task] process_session {conv_id} → FAILED: {exc}")
         raise self.retry(exc=exc, countdown=5) if self.request.retries < 1 else exc
+
+
+def _send_notifications(conv) -> None:
+    """
+    Send email notifications after a session completes.
+    Non-blocking — any error here is logged but never re-raises.
+    """
+    try:
+        from config import Config
+        from models.user import User
+        from services.email_service import notify_session_complete, notify_field_alert
+
+        if not Config.RESEND_API_KEY:
+            return   # email not configured — skip silently
+
+        # Find the session owner's email
+        owner = User.query.get(conv.user_id) if conv.user_id else None
+        if not owner or not owner.email:
+            return
+
+        summary_dict = conv.summary.to_dict() if conv.summary else {}
+
+        # Send "session ready" notification
+        notify_session_complete(
+            to_email = owner.email,
+            conv_id  = conv.id,
+            title    = conv.title or "Untitled Session",
+            summary  = summary_dict,
+            app_url  = Config.APP_URL,
+        )
+
+        # Send field-alert if any critical fields are missing
+        missing = []
+        if conv.summary and conv.summary.field_reminders:
+            missing = [
+                r.field_name.replace("_", " ").title()
+                for r in conv.summary.field_reminders
+                if not r.is_resolved and r.severity == "critical"
+            ]
+        if missing:
+            notify_field_alert(
+                to_email = owner.email,
+                conv_id  = conv.id,
+                title    = conv.title or "Untitled Session",
+                missing  = missing,
+                app_url  = Config.APP_URL,
+            )
+    except Exception as e:
+        print(f"[task/email] notification failed for {conv.id}: {e}")
 
 
 # ── Dispatch helper ─────────────────────────────────────────────────────────

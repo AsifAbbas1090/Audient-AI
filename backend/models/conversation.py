@@ -40,6 +40,14 @@ class Conversation(db.Model):
     approved_at = db.Column(db.DateTime(timezone=True), nullable=True)
     deleted_at  = db.Column(db.DateTime(timezone=True), nullable=True)  # soft delete
 
+    # Optional link to a parent session (continuation sessions)
+    parent_id = db.Column(
+        db.String(36),
+        db.ForeignKey("conversations.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     # Optional link to a Patient record
     patient_id  = db.Column(
         db.String(36),
@@ -74,6 +82,7 @@ class Conversation(db.Model):
             "deleted_at":  self.deleted_at.isoformat()  if self.deleted_at  else None,
             "patient_id":  self.patient_id,
             "patient_name": self.patient.name if self.patient else None,
+            "parent_id":   self.parent_id,
         }
 
     def to_dict_full(self) -> dict:

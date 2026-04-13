@@ -39,6 +39,9 @@ class Summary(db.Model):
     emotional_state = db.Column(db.String(255), nullable=True)
     additional_notes = db.Column(db.Text, nullable=True)
 
+    # AI-generated follow-up questions for the next visit
+    follow_up_questions = db.Column(db.JSON, nullable=True)   # list[str]
+
     created_at = db.Column(db.DateTime(timezone=True), default=_now)
 
     # One-to-many: a summary can have multiple field reminders
@@ -61,6 +64,7 @@ class Summary(db.Model):
             "education": self.education,
             "emotional_state": self.emotional_state,
             "additional_notes": self.additional_notes,
+            "follow_up_questions": self.follow_up_questions or [],
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "field_reminders": [r.to_dict() for r in self.field_reminders],
         }

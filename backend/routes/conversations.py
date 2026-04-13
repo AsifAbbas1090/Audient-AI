@@ -59,7 +59,7 @@ def _save_transcript(conv_id: str, segments: list, language: str | None = None) 
         db.session.add(line)
 
 
-def _save_summary(conv_id: str, extraction: dict) -> None:
+def _save_summary(conv_id: str, extraction: dict, followups: list | None = None) -> None:
     """Persist AI-extracted medical fields for a conversation."""
     if not extraction or extraction.get("skipped") or extraction.get("error"):
         return
@@ -74,6 +74,7 @@ def _save_summary(conv_id: str, extraction: dict) -> None:
         emotional_state=extraction.get("EmotionalState"),
         additional_notes=extraction.get("AdditionalNotes"),
         extracted_entities=extraction,
+        follow_up_questions=followups or [],
     )
     db.session.add(summary)
 
@@ -154,7 +155,20 @@ def list_conversations():
 
     q = request.args.get("q", "").strip()
     if q:
-        query = query.filter(Conversation.title.ilike(f"%{q}%"))
+        from config import Config
+        if Config._is_postgres:
+            # Use PostgreSQL full-text search (tsvector GIN index) when available.
+            # Falls back to ilike if the column hasn't been added yet.
+            try:
+                from sqlalchemy import func, cast
+                from sqlalchemy.dialects.postgresql import TSVECTOR
+                ts_query = func.plainto_tsquery("english", q)
+                ts_vec   = func.to_tsvector("english", Conversation.title)
+                query = query.filter(ts_vec.op("@@")(ts_query))
+            except Exception:
+                query = query.filter(Conversation.title.ilike(f"%{q}%"))
+        else:
+            query = query.filter(Conversation.title.ilike(f"%{q}%"))
 
     convs = query.order_by(Conversation.created_at.desc()).all()
 
@@ -601,6 +615,82 @@ def recommend(conv_id: str):
     except Exception as e:
         print(f"[recommend] error: {e}")
         return jsonify({"error": "Failed to generate recommendations."}), 500
+
+
+# ── PDF export ───────────────────────────────────────────────────────────────
+
+@conversations_bp.route("/<string:conv_id>/export/pdf", methods=["GET"])
+@require_auth
+def export_pdf(conv_id: str):
+    """
+    Generate and stream a clinical note PDF for a completed session.
+
+    Returns a PDF file download (application/pdf).
+    """
+    from flask import make_response
+    from services.pdf_service import generate_session_pdf
+
+    conv = Conversation.query.get(conv_id)
+    if not conv or conv.deleted_at:
+        return jsonify({"error": "Conversation not found"}), 404
+    if conv.user_id and conv.user_id != g.user_id and g.user_role != "admin":
+        return jsonify({"error": "Access denied"}), 403
+
+    try:
+        pdf_bytes = generate_session_pdf(conv)
+        safe_title = (conv.title or "session").replace(" ", "_")[:40]
+        filename   = f"audient_{safe_title}_{conv.id[:8]}.pdf"
+
+        response = make_response(pdf_bytes)
+        response.headers["Content-Type"]        = "application/pdf"
+        response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+        response.headers["Content-Length"]      = len(pdf_bytes)
+
+        log_action("pdf_exported", "conversation", conv_id, {"title": conv.title})
+        return response
+    except Exception as e:
+        print(f"[pdf] export error for {conv_id}: {e}")
+        return jsonify({"error": "Could not generate PDF"}), 500
+
+
+# ── Continue session ─────────────────────────────────────────────────────────
+
+@conversations_bp.route("/<string:conv_id>/continue", methods=["POST"])
+@require_auth
+def continue_session(conv_id: str):
+    """
+    Create a new 'continuation' conversation linked to an existing completed one.
+    The continuation is a standard live session but pre-linked via parent_id so
+    the frontend can:
+      - Show the original's follow-up questions as context
+      - Append the new transcript to the parent after completion
+
+    Returns the new conversation's session_id so LiveSessionPage can use it.
+    """
+    if not _db_available():
+        return jsonify({"error": "Database not configured"}), 503
+
+    parent = Conversation.query.get(conv_id)
+    if not parent or parent.deleted_at:
+        return jsonify({"error": "Original session not found"}), 404
+    if parent.user_id and parent.user_id != g.user_id and g.user_role != "admin":
+        return jsonify({"error": "Access denied"}), 403
+
+    try:
+        cont = Conversation(
+            user_id=g.user_id,
+            title=f"Follow-up: {parent.title or 'session'}",
+            status="processing",
+            language=parent.language,
+            parent_id=conv_id,
+            is_offline=False,
+        )
+        db.session.add(cont)
+        db.session.commit()
+        return jsonify({"session_id": cont.id, "parent_id": conv_id}), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
 
 
 # ── Utility ──────────────────────────────────────────────────────────────────

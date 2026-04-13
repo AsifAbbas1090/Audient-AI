@@ -125,10 +125,11 @@ def handle_audio_chunk(data):
     if not isinstance(data, dict):
         return
 
-    audio_bytes = data.get("audio")
-    session_id  = (data.get("session_id") or "").strip()
-    lang_hint   = (data.get("language")   or "").strip()
-    is_final    = bool(data.get("is_final"))
+    audio_bytes    = data.get("audio")
+    session_id     = (data.get("session_id")     or "").strip()
+    lang_hint      = (data.get("language")       or "").strip()
+    is_final       = bool(data.get("is_final"))
+    forced_speaker = (data.get("forced_speaker") or "").strip()  # dual-mic override
 
     if not audio_bytes or len(audio_bytes) < 500:
         return  # silence / empty chunk — skip
@@ -154,8 +155,16 @@ def handle_audio_chunk(data):
         if not segments:
             return
 
+        # ── Dual-mic: override speaker label when forced_speaker is set ──
+        # The patient mic sends chunks tagged with forced_speaker="Patient"
+        # so we skip diarization and assign the label directly.
+        if forced_speaker:
+            for seg in segments:
+                seg["speaker"] = forced_speaker
+
         # ── Audio accumulation for pyannote (if HF_TOKEN configured) ────
-        if Config.HF_TOKEN and session_id and audio_service.session_exists(session_id):
+        # Skip accumulation for patient mic — pyannote runs on doctor audio only
+        if Config.HF_TOKEN and session_id and not forced_speaker and audio_service.session_exists(session_id):
             audio_service.append_chunk_to_session(session_id, tmp_path)
             tmp_path = None  # audio_service now owns the file
 

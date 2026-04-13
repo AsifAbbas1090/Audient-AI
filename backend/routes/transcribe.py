@@ -10,6 +10,7 @@ from flask import Blueprint, request, jsonify
 from werkzeug.utils import secure_filename
 
 from config import Config
+from extensions import limiter
 from services import audio_service, whisper_service
 
 transcribe_bp = Blueprint("transcribe", __name__)
@@ -23,6 +24,7 @@ def transcribe_get():
 
 @transcribe_bp.route("/transcribe", methods=["POST"])
 @transcribe_bp.route("/api/transcribe", methods=["POST"])
+@limiter.limit("60 per minute", error_message="Transcription rate limit exceeded — max 60 requests/minute.")
 def transcribe_audio():
     """
     Transcribe an audio chunk (WebM, WAV, MP3, etc.) via Groq Whisper.

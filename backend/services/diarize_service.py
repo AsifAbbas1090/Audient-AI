@@ -9,6 +9,36 @@ import re
 from typing import List, Dict, Any, Optional
 
 
+def split_segments_by_sentence(segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Split multi-sentence segments into one-sentence units with interpolated
+    timestamps.  This gives the LLM diarizer more lines to reason about, which
+    dramatically improves accuracy on single-mic recordings where Whisper often
+    returns 1–3 large segments containing the whole conversation.
+    """
+    import re
+    result = []
+    for seg in segments:
+        text = (seg.get("text") or "").strip()
+        # Split on sentence-ending punctuation followed by whitespace
+        sentences = re.split(r'(?<=[.?!])\s+', text)
+        sentences = [s.strip() for s in sentences if s.strip()]
+        if len(sentences) <= 1:
+            result.append(seg)
+        else:
+            start = float(seg.get("start") or 0)
+            end   = float(seg.get("end")   or 0)
+            dur   = (end - start) / len(sentences)
+            for i, sentence in enumerate(sentences):
+                result.append({
+                    **seg,
+                    "text":  sentence,
+                    "start": round(start + i * dur, 3),
+                    "end":   round(start + (i + 1) * dur, 3),
+                })
+    return result
+
+
 def diarize_with_groq(segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Use Groq LLM to assign speaker labels from transcript context alone.
@@ -72,7 +102,7 @@ def diarize_with_groq(segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         for seg in segments:
             if (seg.get("text") or "").strip():
                 raw_label = labels[label_idx] if label_idx < len(labels) else "Doctor"
-                speaker   = "Speaker 1" if "doctor" in raw_label.lower() else "Speaker 2"
+                speaker   = "Doctor" if "doctor" in raw_label.lower() else "Patient"
                 result.append({**seg, "speaker": speaker})
                 label_idx += 1
             else:

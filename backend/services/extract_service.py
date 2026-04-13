@@ -79,6 +79,63 @@ def _extract_ollama(text: str) -> Dict[str, Any]:
     return _parse_json(content)
 
 
+_FOLLOWUP_PROMPT = """You are a clinical assistant reviewing a completed medical consultation.
+Based on the transcript and extracted data below, identify 3-5 specific follow-up questions the doctor should ask at the next visit (or in a follow-up call) to fill clinical gaps or monitor the patient.
+
+Rules:
+- Be specific and clinically relevant — not generic advice.
+- Focus on: missing history, unmonitored medications, unresolved symptoms, test results not yet discussed.
+- Return ONLY a JSON array of question strings, no other text.
+
+Example: ["What was the patient's blood pressure reading today?", "Has the patient had a HbA1c test in the last 3 months?"]
+
+Extracted fields:
+{extracted}
+
+Transcript:
+{text}"""
+
+
+def generate_followups(text: str, extracted: Dict[str, Any]) -> list:
+    """
+    Generate 3-5 follow-up questions based on transcript + extracted fields.
+    Returns a list of question strings, or [] on any error.
+    """
+    from config import Config
+
+    if not Config.GROQ_API_KEY or not text.strip():
+        return []
+
+    import re
+
+    try:
+        from groq import Groq
+
+        client = Groq(api_key=Config.GROQ_API_KEY)
+        extracted_clean = {k: v for k, v in extracted.items() if v and v != "null"}
+        extracted_str   = json.dumps(extracted_clean, indent=2)
+
+        resp = client.chat.completions.create(
+            model=Config.GROQ_EXTRACT_MODEL,
+            messages=[{
+                "role": "user",
+                "content": _FOLLOWUP_PROMPT.format(
+                    extracted=extracted_str,
+                    text=text[:3000],
+                ),
+            }],
+            max_tokens=400,
+            temperature=0,
+        )
+        content = (resp.choices[0].message.content or "").strip()
+        match   = re.search(r'\[.*?\]', content, re.DOTALL)
+        if match:
+            return json.loads(match.group())
+    except Exception as e:
+        print(f"[Extract/followups] Error: {e}")
+    return []
+
+
 def extract(text: str) -> Dict[str, Any]:
     """
     Extract structured medical fields from transcript text.
