@@ -145,7 +145,7 @@ def link_patient(conv_id: str):
     conv = Conversation.query.get(conv_id)
     if not conv:
         return jsonify({"error": "Conversation not found"}), 404
-    if conv.user_id != g.user_id and g.user_role != "admin":
+    if conv.user_id and conv.user_id != g.user_id and g.user_role != "admin":
         return jsonify({"error": "Access denied"}), 403
     if conv.status == "approved" and g.user_role != "admin":
         return jsonify({"error": "Record is approved and locked"}), 403

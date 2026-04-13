@@ -23,16 +23,18 @@ def session_start():
     session_id = str(uuid.uuid4())
     audio_service.create_session(session_id)
 
-    # Persist a Conversation record when DB is configured and user is authenticated
+    # Persist a Conversation record when DB is configured (with or without auth)
     user_id = getattr(g, "user_id", None)
-    if user_id:
+    if Config.DATABASE_URL:
         try:
             from extensions import db
             from models.conversation import Conversation
-            conv = Conversation(id=session_id, user_id=user_id, status="processing")
+            conv = Conversation(id=session_id, user_id=user_id, status="processing", is_offline=False)
             db.session.add(conv)
             db.session.commit()
+            print(f"[session/start] Conversation {session_id} created (user_id={user_id})")
         except Exception as e:
+            db.session.rollback()
             print(f"[session/start] Could not persist conversation: {e}")
 
     return jsonify({"session_id": session_id})

@@ -126,11 +126,29 @@ def _generate_field_reminders(summary: "Summary") -> None:
 @conversations_bp.route("", methods=["GET"])
 @require_auth
 def list_conversations():
-    """Return conversations belonging to the authenticated user."""
-    query = Conversation.query.filter_by(user_id=g.user_id).filter(Conversation.deleted_at.is_(None))
+    """
+    Return conversations for the authenticated user.
+    Includes:
+      - conversations explicitly owned by this user (user_id = current)
+      - orphaned conversations with no owner (user_id IS NULL) — created
+        before auth was wired, or from anonymous sessions. These are
+        auto-claimed: their user_id is silently updated in this request.
+    """
+    from sqlalchemy import or_
+
+    query = (
+        Conversation.query
+        .filter(
+            or_(
+                Conversation.user_id == g.user_id,
+                Conversation.user_id.is_(None),
+            )
+        )
+        .filter(Conversation.deleted_at.is_(None))
+    )
 
     status = request.args.get("status")
-    if status in ("processing", "complete", "failed"):
+    if status in ("processing", "complete", "failed", "approved"):
         query = query.filter_by(status=status)
 
     q = request.args.get("q", "").strip()
@@ -138,6 +156,17 @@ def list_conversations():
         query = query.filter(Conversation.title.ilike(f"%{q}%"))
 
     convs = query.order_by(Conversation.created_at.desc()).all()
+
+    # Auto-claim orphaned sessions — assign this user as owner
+    claimed = [c for c in convs if c.user_id is None]
+    if claimed:
+        for c in claimed:
+            c.user_id = g.user_id
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()   # non-fatal — sessions still returned
+
     return jsonify({"conversations": [c.to_dict() for c in convs], "total": len(convs)}), 200
 
 
@@ -206,6 +235,15 @@ def get_conversation(conv_id: str):
         return jsonify({"error": "Conversation not found"}), 404
     if conv.user_id and conv.user_id != g.user_id and g.user_role != "admin":
         return jsonify({"error": "Access denied"}), 403
+
+    # Auto-claim orphaned session
+    if conv.user_id is None:
+        conv.user_id = g.user_id
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+
     return jsonify({"conversation": conv.to_dict_full()}), 200
 
 
@@ -229,16 +267,17 @@ def complete_conversation(conv_id: str):
     if not _db_available():
         return jsonify({"error": "Database not configured"}), 503
 
+    user_id = getattr(g, "user_id", None)
+
     conv = Conversation.query.get(conv_id)
     if not conv:
-        # Conversation row may not have been created (unauthenticated session)
-        # Create it now so the data is not lost
-        conv = Conversation(id=conv_id, status="processing", is_offline=False)
+        # Conversation row may not have been created (e.g. session/start DB error)
+        # Create it now and immediately assign the current user so it shows up in their list
+        conv = Conversation(id=conv_id, user_id=user_id, status="processing", is_offline=False)
         db.session.add(conv)
         db.session.flush()
 
     # Check access — allow if conversation has no owner (anonymous) or owner matches
-    user_id = getattr(g, "user_id", None)
     if conv.user_id and user_id and conv.user_id != user_id and getattr(g, "user_role", "") != "admin":
         return jsonify({"error": "Access denied"}), 403
 
@@ -286,8 +325,12 @@ def update_conversation(conv_id: str):
     conv = Conversation.query.get(conv_id)
     if not conv:
         return jsonify({"error": "Conversation not found"}), 404
-    if conv.user_id != g.user_id and g.user_role != "admin":
+    # Allow access if: owner matches, session is orphaned (null owner), or user is admin
+    if conv.user_id and conv.user_id != g.user_id and g.user_role != "admin":
         return jsonify({"error": "Access denied"}), 403
+    # Claim orphaned session
+    if conv.user_id is None:
+        conv.user_id = g.user_id
 
     # Approved records are locked — only admins can make changes
     if conv.status == "approved" and g.user_role != "admin":
@@ -324,7 +367,7 @@ def delete_conversation(conv_id: str):
     conv = Conversation.query.get(conv_id)
     if not conv:
         return jsonify({"error": "Conversation not found"}), 404
-    if conv.user_id != g.user_id and g.user_role != "admin":
+    if conv.user_id and conv.user_id != g.user_id and g.user_role != "admin":
         return jsonify({"error": "Access denied"}), 403
 
     try:
@@ -354,7 +397,7 @@ def update_summary(conv_id: str):
     conv = Conversation.query.get(conv_id)
     if not conv:
         return jsonify({"error": "Conversation not found"}), 404
-    if conv.user_id != g.user_id and g.user_role != "admin":
+    if conv.user_id and conv.user_id != g.user_id and g.user_role != "admin":
         return jsonify({"error": "Access denied"}), 403
     if conv.status == "approved" and g.user_role != "admin":
         return jsonify({"error": "Record is approved and locked."}), 403
@@ -456,7 +499,7 @@ def resolve_reminder(conv_id: str, rid: str):
     conv = Conversation.query.get(conv_id)
     if not conv:
         return jsonify({"error": "Conversation not found"}), 404
-    if conv.user_id != g.user_id and g.user_role != "admin":
+    if conv.user_id and conv.user_id != g.user_id and g.user_role != "admin":
         return jsonify({"error": "Access denied"}), 403
 
     if not conv.summary:
