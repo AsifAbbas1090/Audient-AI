@@ -6,6 +6,17 @@ Bound to the app in app.py via the factory pattern.
 """
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
+from flask_socketio import SocketIO
 
-db = SQLAlchemy()
+db   = SQLAlchemy()
 cors = CORS()
+# async_mode='threading' — no monkey-patching required, works with all stdlib.
+# For high concurrency (100+ simultaneous doctors) switch to eventlet:
+#   pip install eventlet
+#   change to async_mode='eventlet' and add eventlet.monkey_patch() at top of app.py
+socketio = SocketIO(
+    cors_allowed_origins="*",
+    async_mode="threading",
+    logger=False,
+    engineio_logger=False,
+)

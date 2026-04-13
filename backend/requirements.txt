@@ -3,6 +3,10 @@ flask
 flask-cors
 flask-sqlalchemy
 
+# WebSocket support (real-time transcription)
+flask-socketio>=5.3.6
+python-socketio>=5.11.0
+
 # Database
 sqlalchemy
 psycopg2-binary
@@ -17,12 +21,31 @@ bcrypt>=4.0.0
 # Transcription + Extraction (online — Groq API)
 groq>=0.9.0
 
-# Audio utilities (minimal — just for file handling)
+# Audio utilities
 numpy
 soundfile
+
+# Task queue (background processing — requires Redis)
+# Start Redis: docker run -d -p 6379:6379 redis
+# Or use Upstash Redis free tier (https://upstash.com)
+# Set REDIS_URL in .env to enable; falls back to threads if not set
+celery[redis]>=5.3.0
+redis>=5.0.0
 
 # Ollama fallback (offline extraction — optional)
 openai
 
 # Production server
 gunicorn
+
+# SSL certificate handling
+certifi
+
+# ── Optional: pyannote audio-based diarization ──────────────────────────────
+# Requires HF_TOKEN in .env + accepting model license at:
+#   https://huggingface.co/pyannote/speaker-diarization-3.1
+# These packages are large (~3 GB). Only install if you need audio diarization.
+# To install: pip install torch torchaudio pyannote.audio
+# torch>=2.0.0
+# torchaudio>=2.0.0
+# pyannote.audio>=3.1.0

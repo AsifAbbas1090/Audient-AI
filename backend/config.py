@@ -69,6 +69,14 @@ class Config:
     JWT_EXPIRY_DAYS: int = int(os.getenv("JWT_EXPIRY_DAYS", "7"))
 
     # ------------------------------------------------------------------ #
+    # Task Queue (Celery + Redis)                                          #
+    # Set REDIS_URL to enable background processing.                       #
+    # Without it the /complete pipeline runs in a daemon thread instead.  #
+    # Free Redis: https://upstash.com  or  docker run -d -p 6379:6379 redis
+    # ------------------------------------------------------------------ #
+    REDIS_URL: str = os.getenv("REDIS_URL", "").strip()
+
+    # ------------------------------------------------------------------ #
     # Server                                                               #
     # ------------------------------------------------------------------ #
     PORT: int = int(os.getenv("PORT", "5000"))

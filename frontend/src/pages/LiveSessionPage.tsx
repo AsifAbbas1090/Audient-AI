@@ -1,5 +1,9 @@
-import { useState, useEffect, useRef } from 'react'
-import { Square, Clock, WifiOff, Download, Trash2, Save, CheckCircle2, Mic, MicOff } from 'lucide-react'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { useNavigate }       from 'react-router-dom'
+import {
+  Square, Clock, Download, Trash2, CheckCircle2,
+  Mic, MicOff, Wifi, WifiOff, Loader2, AlertCircle,
+} from 'lucide-react'
 import { Sidebar }       from '../components/ui/Sidebar'
 import { Badge }         from '../components/ui/Badge'
 import { Button }        from '../components/ui/Button'
@@ -7,113 +11,75 @@ import { Card }          from '../components/ui/Card'
 import { Waveform }      from '../components/visual/Waveform'
 import { RecordButton }  from '../components/visual/RecordButton'
 import { SpeakerBubble } from '../components/visual/SpeakerBubble'
-import { useMediaRecorder }   from '../hooks/useMediaRecorder'
-import { useVoiceCommands }   from '../hooks/useVoiceCommands'
-import { useToast }           from '../components/ui/Toaster'
+import { useVoiceCommands }  from '../hooks/useVoiceCommands'
+import { useLiveSession, type Segment } from '../hooks/useLiveSession'
+import { useToast }          from '../components/ui/Toaster'
 import api from '../lib/api'
 
-// ── Constants ────────────────────────────────────────────────
-const CHUNK_INTERVAL_MS  = 3000
-const DIARIZE_POLL_MS    = 8000   // re-label speakers every 8 s
+// ── Constants ────────────────────────────────────────────────────────────────
+const POLL_MS = 2_000   // status poll interval after /complete
 
-// ── Types ────────────────────────────────────────────────────
-type Segment = {
-  id:       number
-  speaker:  string
-  text:     string
-  start?:   number
-  end?:     number
-}
-
-type APIData = {
-  segments?: { speaker: string; text: string; start?: number; end?: number }[]
-  text?:     string
-  language?: string
-  error?:    string
-  diarization_skipped?: string
-} | null
-
-// ── Helpers ──────────────────────────────────────────────────
-async function sendChunk(blob: Blob, sessionId?: string | null): Promise<APIData> {
-  if (blob.size < 500) return null
-  const form = new FormData()
-  form.append('file', blob, 'speech.webm')
-  form.append('translate', 'true')
-  form.append('diarize',   'true')
-  if (sessionId) form.append('session_id', sessionId)
-  const res = await api.post('/api/transcribe', form, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  })
-  return res.data
-}
-
-function appendSegments(
-  prev:       Segment[],
-  data:       APIData,
-  idBase:     number,
-  timeOffset: number = 0,
-): Segment[] {
-  if (!data) return prev
-  if (data.segments?.length) {
-    const withText = data.segments.filter(s => (s.text || '').trim())
-    if (!withText.length) return prev
-    return [
-      ...prev,
-      ...withText.map((s, i) => ({
-        id:      idBase + i + Math.random(),
-        speaker: s.speaker,
-        text:    (s.text || '').trim(),
-        start:   (s.start ?? 0) + timeOffset,
-        end:     (s.end   ?? 0) + timeOffset,
-      })),
-    ]
-  }
-  if (data.text?.trim()) {
-    return [...prev, { id: idBase + Math.random(), speaker: 'Speaker 1', text: data.text, start: timeOffset, end: timeOffset }]
-  }
-  return prev
-}
-
-function formatTime(seconds: number): string {
-  const m = Math.floor(seconds / 60).toString().padStart(2, '0')
-  const s = Math.floor(seconds % 60).toString().padStart(2, '0')
+// ── Helpers ──────────────────────────────────────────────────────────────────
+function formatTime(sec: number): string {
+  const m = Math.floor(sec / 60).toString().padStart(2, '0')
+  const s = Math.floor(sec % 60).toString().padStart(2, '0')
   return `${m}:${s}`
 }
 
-// ── Page ─────────────────────────────────────────────────────
+// ── Processing progress steps ─────────────────────────────────────────────────
+const PROGRESS_STEPS = [
+  { label: 'Saving transcript',            pct: 20 },
+  { label: 'Labelling speakers…',          pct: 45 },
+  { label: 'Extracting medical fields…',   pct: 70 },
+  { label: 'Generating field alerts…',     pct: 90 },
+  { label: 'Done',                         pct: 100 },
+]
+
+function ProcessingOverlay({ step }: { step: number }) {
+  const current = PROGRESS_STEPS[Math.min(step, PROGRESS_STEPS.length - 1)]
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-surface-400/90 backdrop-blur-sm">
+      <div className="w-full max-w-sm mx-4 bg-white/5 border border-white/10 rounded-2xl p-8 text-center shadow-2xl">
+        <Loader2 size={40} className="mx-auto text-brand-400 animate-spin mb-5" />
+        <h2 className="text-white font-semibold text-lg mb-1">Processing Session</h2>
+        <p className="text-slate-400 text-sm mb-6">{current.label}</p>
+
+        {/* Progress bar */}
+        <div className="h-1.5 w-full bg-white/10 rounded-full overflow-hidden">
+          <div
+            className="h-full bg-brand-500 rounded-full transition-all duration-700"
+            style={{ width: `${current.pct}%` }}
+          />
+        </div>
+        <p className="text-xs text-slate-600 mt-3">
+          AI is diarizing speakers and extracting clinical fields…
+        </p>
+      </div>
+    </div>
+  )
+}
+
+// ── Page ─────────────────────────────────────────────────────────────────────
 export default function LiveSessionPage() {
-  const [active,      setActive]      = useState(false)
-  const [paused,      setPaused]      = useState(false)
-  const [sessionId,   setSessionId]   = useState<string | null>(null)
-  const [segments,    setSegments]    = useState<Segment[]>([])
-  const [processing,  setProcessing]  = useState(false)
-  const [statusMsg,   setStatusMsg]   = useState<string | null>(null)
-  const [elapsed,     setElapsed]     = useState(0)
-  const [isSaving,    setIsSaving]    = useState(false)
-  const [savedId,     setSavedId]     = useState<string | null>(null)
+  const navigate = useNavigate()
+  const toast    = useToast()
 
-  const intervalRef        = useRef<ReturnType<typeof setInterval> | null>(null)
-  const timerRef           = useRef<ReturnType<typeof setInterval> | null>(null)
-  const segmentsRef        = useRef<Segment[]>([])
-  const timeOffsetRef      = useRef(0)
-  const bottomRef          = useRef<HTMLDivElement>(null)
-  // Keep session ID available after active is set to false (for save trigger)
-  const pendingSessionIdRef = useRef<string | null>(null)
-  const savedRef            = useRef(false)
-  const elapsedRef          = useRef(0)
-  // Detected language from Whisper (captured from first chunk that returns one)
-  const detectedLangRef     = useRef<string>('Unknown')
-  // Final audio blob captured when recording stops — uploaded after DB save
-  const audioBlobRef        = useRef<Blob | null>(null)
+  const [segments,      setSegments]      = useState<Segment[]>([])
+  const [elapsed,       setElapsed]       = useState(0)
+  const [processing,    setProcessing]    = useState(false)  // chunk being transcribed
+  const [saving,        setSaving]        = useState(false)  // /complete called, polling
+  const [progressStep,  setProgressStep]  = useState(0)      // 0-4 index into PROGRESS_STEPS
+  const [savedId,       setSavedId]       = useState<string | null>(null)
+  const [statusMsg,     setStatusMsg]     = useState<string | null>(null)
 
-  segmentsRef.current = segments
+  const timerRef       = useRef<ReturnType<typeof setInterval> | null>(null)
+  const pollRef        = useRef<ReturnType<typeof setInterval> | null>(null)
+  const savedIdRef     = useRef<string | null>(null)  // for poll closure
+  const elapsedRef     = useRef(0)
+  const bottomRef      = useRef<HTMLDivElement>(null)
+  const isSavingRef    = useRef(false)   // guard against double-save
 
-  const toast = useToast()
-
-  const { recording, start, stop, reset, getBlob, chunks, permissionError, takeChunk } =
-    useMediaRecorder({ mimeType: 'audio/webm' })
-
-  // Keep elapsedRef in sync for save
+  // Keep refs in sync
   useEffect(() => { elapsedRef.current = elapsed }, [elapsed])
 
   // Auto-scroll transcript
@@ -121,220 +87,213 @@ export default function LiveSessionPage() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [segments])
 
-  // Elapsed timer
+  // ── WebSocket session hook ─────────────────────────────────────────────────
+  const session = useLiveSession({
+    onTranscriptUpdate: useCallback((newSegs: Segment[]) => {
+      setProcessing(false)
+      setSegments(prev => {
+        const next = [...prev, ...newSegs]
+        session.setSegmentsRef(next)
+        return next
+      })
+    }, []),  // eslint-disable-line react-hooks/exhaustive-deps
+
+    onDiarizeUpdate: useCallback((rawSegs) => {
+      // rawSegs is the full re-labeled list — map speaker labels back
+      setSegments(prev => {
+        let idx = 0
+        return prev.map(seg => {
+          if (seg.start == null || seg.end == null) return seg
+          const labeled = rawSegs[idx]
+          if (!labeled) return seg
+          idx++
+          return { ...seg, speaker: labeled.speaker || seg.speaker }
+        })
+      })
+    }, []),
+
+    onLanguage: useCallback((lang: string) => {
+      console.log('[Live] detected language:', lang)
+    }, []),
+
+    onError: useCallback((msg: string) => {
+      setStatusMsg(msg)
+      setProcessing(false)
+    }, []),
+  })
+
+  const {
+    connected, sessionId, active, paused, recording,
+    permissionError, startSession, pauseSession, resumeSession, stopSession,
+    getBlob, chunks,
+  } = session
+
+  // ── Timer ──────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (active && !paused) {
-      timerRef.current = setInterval(() => setElapsed(e => e + 1), 1000)
+      timerRef.current = setInterval(() => setElapsed(e => e + 1), 1_000)
     } else {
       if (timerRef.current) clearInterval(timerRef.current)
     }
     return () => { if (timerRef.current) clearInterval(timerRef.current) }
   }, [active, paused])
 
-  // Chunk → transcribe loop
+  // ── Processing flag when chunks are in-flight ──────────────────────────────
   useEffect(() => {
-    if (!active || paused || !recording) return
+    if (active && !paused) setProcessing(true)
+  }, [segments.length])  // eslint-disable-line react-hooks/exhaustive-deps
 
-    const processChunk = async () => {
-      const blob = await takeChunk()
-      if (!blob) return
-      setProcessing(true)
-      setStatusMsg(null)
-      try {
-        const data = await sendChunk(blob, sessionId)
-        if (data?.error) setStatusMsg(data.error)
-        // Capture detected language from first chunk that returns one
-        if (data?.language && data.language !== 'Unknown' && detectedLangRef.current === 'Unknown') {
-          detectedLangRef.current = data.language
-        }
-        const offset = sessionId ? timeOffsetRef.current : 0
-        setSegments(prev => {
-          const next = appendSegments(prev, data, Date.now(), offset)
-          if (sessionId && data?.segments?.length) {
-            const added  = next.slice(prev.length)
-            const maxEnd = added.reduce((m, s) => Math.max(m, s.end ?? 0), 0)
-            timeOffsetRef.current = maxEnd
-          }
-          return next
-        })
-      } catch (err: unknown) {
-        const msg = (err as { response?: { data?: { error?: string } }; message?: string })
-          ?.response?.data?.error ?? (err as { message?: string })?.message ?? 'Transcription failed'
-        setStatusMsg(msg)
-      } finally {
-        setProcessing(false)
-      }
-    }
-
-    processChunk()
-    intervalRef.current = setInterval(processChunk, CHUNK_INTERVAL_MS)
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current) }
-  }, [active, paused, recording, sessionId])
-
-  // Full-session diarization — runs every 8 s AND whenever segments change
-  // (so the first batch of text gets labeled immediately, not after 8 s)
-  const diarizeRunningRef = useRef(false)
+  // ── Auto-save when recording ends ─────────────────────────────────────────
   useEffect(() => {
-    if (!active || !sessionId || !segments.length) return
-    // Debounce: skip if a diarize call is already in-flight
-    if (diarizeRunningRef.current) return
-
-    const withTime = segments.filter(t => t.start != null && t.end != null)
-      .map(t => ({ start: t.start!, end: t.end!, text: t.text }))
-    if (!withTime.length) return
-
-    diarizeRunningRef.current = true
-    api.post('/api/session/diarize', { session_id: sessionId, segments: withTime })
-      .then(res => {
-        const labeled = res.data?.segments as { start: number; end: number; text: string; speaker: string }[] | undefined
-        if (!labeled?.length) return
-        setSegments(prev => {
-          let idx = 0
-          return prev.map(t => {
-            if (t.start == null || t.end == null) return t
-            const speaker = labeled[idx]?.speaker ?? t.speaker
-            idx++
-            return { ...t, speaker }
-          })
-        })
-      })
-      .catch(() => { /* silent */ })
-      .finally(() => { diarizeRunningRef.current = false })
-  }, [segments, active, sessionId])
-
-  // Final chunk when recording stops
-  useEffect(() => {
-    if (recording || !chunks.length) return
-    const processAudio = async () => {
-      setProcessing(true)
-      const blob = getBlob('audio/webm')
-      // Store full blob for audio upload after save
-      if (blob && blob.size >= 500) {
-        audioBlobRef.current = blob
-        try {
-          const data   = await sendChunk(blob, pendingSessionIdRef.current)
-          if (data?.language && data.language !== 'Unknown' && detectedLangRef.current === 'Unknown') {
-            detectedLangRef.current = data.language
-          }
-          const offset = pendingSessionIdRef.current ? timeOffsetRef.current : 0
-          setSegments(prev => appendSegments(prev, data, Date.now(), offset))
-        } catch { /* silent */ }
-      }
-      setProcessing(false)
-    }
-    processAudio()
-  }, [recording, chunks])
-
-  // ── Auto-save after session ends and final chunk is processed ────────────
-  useEffect(() => {
-    const pendingId = pendingSessionIdRef.current
     if (
-      !active           &&   // session ended
-      !recording        &&   // recorder stopped
-      !processing       &&   // final chunk done
-      segments.length > 0 && // have something to save
-      pendingId         &&   // have a session to save to
-      !savedRef.current      // not already saved
+      !active        &&
+      !recording     &&
+      segments.length > 0 &&
+      sessionId      &&
+      !isSavingRef.current
     ) {
-      savedRef.current = true
-      saveSession(pendingId)
+      isSavingRef.current = true
+      saveSession(sessionId)
     }
-  }, [active, recording, processing, segments])
+  }, [active, recording, segments])  // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Save session ───────────────────────────────────────────────────────────
   async function saveSession(convId: string) {
-    setIsSaving(true)
+    setSaving(true)
+    setProgressStep(0)
+
     try {
+      // Step 1 visual — immediately show progress
+      setProgressStep(1)
+
       const payload = {
-        segments: segmentsRef.current.map(s => ({
+        segments: segments.map(s => ({
           speaker: s.speaker,
           text:    s.text,
           start:   s.start,
           end:     s.end,
         })),
-        extraction: null,
-        duration:   elapsedRef.current,
-        language:   detectedLangRef.current,
+        duration: elapsedRef.current,
+        language: session.detectedLanguage(),
       }
+
+      // POST /complete — returns 202 immediately, task runs in background
       const res = await api.post(`/api/conversations/${convId}/complete`, payload)
-      const savedConvId = res.data.conversation?.id ?? convId
-      setSavedId(savedConvId)
-      toast('Session saved to your history', 'success')
+      const convId2 = res.data.conversation_id ?? convId
+      savedIdRef.current = convId2
+      setSavedId(convId2)
 
-      // Upload audio file in background (non-blocking)
-      const audioBlob = audioBlobRef.current
-      if (audioBlob && audioBlob.size >= 500) {
+      // Upload audio in background (non-blocking, non-critical)
+      const blob = getBlob('audio/webm')
+      if (blob && blob.size >= 500) {
         const form = new FormData()
-        form.append('file', audioBlob, 'session.webm')
-        api.post(`/api/conversations/${savedConvId}/audio`, form, {
+        form.append('file', blob, 'session.webm')
+        api.post(`/api/conversations/${convId2}/audio`, form, {
           headers: { 'Content-Type': 'multipart/form-data' },
-        }).catch(() => { /* audio upload failure is non-fatal */ })
+        }).catch(() => {})
       }
-    } catch {
-      toast('Could not save session — transcript is still visible above', 'error')
-    } finally {
-      setIsSaving(false)
-      pendingSessionIdRef.current = null
-      audioBlobRef.current        = null
+
+      // Poll /status until "complete" or "failed"
+      setProgressStep(2)
+      await pollUntilDone(convId2)
+
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })
+        ?.response?.data?.error ?? 'Could not save session'
+      toast(msg, 'error')
+      setSaving(false)
+      isSavingRef.current = false
     }
   }
 
-  // ── Actions ──────────────────────────────────────────────────
-  const toggle = async () => {
-    if (!active) {
-      savedRef.current      = false
-      detectedLangRef.current = 'Unknown'
-      audioBlobRef.current  = null
-      setSavedId(null)
+  async function pollUntilDone(convId: string) {
+    let step = 2
+    pollRef.current = setInterval(async () => {
       try {
-        const res = await api.post('/api/session/start')
-        const id  = res.data?.session_id ?? null
-        setSessionId(id)
-        pendingSessionIdRef.current = id
-        timeOffsetRef.current = 0
-        setElapsed(0)
-      } catch { /* still works without session_id */ }
-      setActive(true)
-      setPaused(false)
-      reset()
-      start()
-      toast('Session started — recording', 'success')
-    } else if (!paused) {
-      setPaused(true)
-      stop()
-      toast('Recording paused', 'info')
-    } else {
-      setPaused(false)
-      reset()
-      start()
-      toast('Recording resumed', 'info')
+        const r = await api.get(`/api/conversations/${convId}/status`)
+        const status = r.data?.status
+
+        // Simulate progress steps while polling
+        step = Math.min(step + 1, PROGRESS_STEPS.length - 2)
+        setProgressStep(step)
+
+        if (status === 'complete' || status === 'approved') {
+          clearInterval(pollRef.current!)
+          setProgressStep(PROGRESS_STEPS.length - 1)
+          setSaving(false)
+          toast('Session saved — opening record…', 'success')
+          // Brief pause so user sees "Done" state
+          setTimeout(() => navigate(`/session/${convId}`), 800)
+        } else if (status === 'failed') {
+          clearInterval(pollRef.current!)
+          setSaving(false)
+          isSavingRef.current = false
+          toast('Processing failed — transcript is still visible above', 'error')
+        }
+      } catch {
+        // Transient network error — keep polling
+      }
+    }, POLL_MS)
+  }
+
+  // Cleanup poll on unmount
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current)
     }
-  }
+  }, [])
 
-  const handleStop = () => {
-    setActive(false)
-    setPaused(false)
-    setSessionId(null)
-    // pendingSessionIdRef keeps the ID for the save trigger
-    stop()
+  // ── Actions ────────────────────────────────────────────────────────────────
+  const handleStart = useCallback(async () => {
+    isSavingRef.current = false
+    setSavedId(null)
+    setSegments([])
+    setElapsed(0)
+    setStatusMsg(null)
+    await startSession()
+    toast('Session started — recording', 'success')
+  }, [startSession, toast])
+
+  const handlePause = useCallback(() => {
+    pauseSession()
+    toast('Recording paused', 'info')
+  }, [pauseSession, toast])
+
+  const handleResume = useCallback(async () => {
+    await resumeSession()
+    toast('Recording resumed', 'info')
+  }, [resumeSession, toast])
+
+  const handleStop = useCallback(() => {
+    stopSession()
     toast('Session ended — saving…', 'info')
-  }
+  }, [stopSession, toast])
 
-  const handleClear = () => {
+  const handleClear = useCallback(() => {
     setSegments([])
     setStatusMsg(null)
     setElapsed(0)
     setSavedId(null)
-    savedRef.current = false
-    pendingSessionIdRef.current = null
-  }
+    isSavingRef.current = false
+  }, [])
 
-  // ── Voice commands ───────────────────────────────────────────
+  const handleToggle = useCallback(async () => {
+    if (!active) {
+      await handleStart()
+    } else if (!paused) {
+      handlePause()
+    } else {
+      await handleResume()
+    }
+  }, [active, paused, handleStart, handlePause, handleResume])
+
+  // ── Voice commands ─────────────────────────────────────────────────────────
   const { listening, lastCommand, supported: voiceSupported, startListening, stopListening } =
     useVoiceCommands({
-      onStart:  () => { if (!active) toggle() },
-      onStop:   () => { if (active)  handleStop() },
-      onPause:  () => { if (active && !paused) toggle() },
-      onResume: () => { if (active && paused)  toggle() },
+      onStart:  () => { if (!active) handleStart() },
+      onStop:   () => { if (active)  handleStop()  },
+      onPause:  () => { if (active && !paused) handlePause() },
+      onResume: () => { if (active && paused)  handleResume() },
       onClear:  handleClear,
     })
 
@@ -353,41 +312,43 @@ export default function LiveSessionPage() {
     const blob  = new Blob([text], { type: 'text/plain' })
     const url   = URL.createObjectURL(blob)
     const a     = document.createElement('a')
-    a.href      = url
-    a.download  = `transcript-${Date.now()}.txt`
-    a.click()
+    a.href = url; a.download = `transcript-${Date.now()}.txt`; a.click()
     URL.revokeObjectURL(url)
   }
 
-  // ── Derived state ────────────────────────────────────────────
-  const recordState = processing && !active
+  // ── Derived state ──────────────────────────────────────────────────────────
+  const recordState = saving
     ? 'processing'
-    : active && !paused
-    ? 'recording'
-    : active && paused
-    ? 'paused'
+    : active && !paused ? 'recording'
+    : active &&  paused ? 'paused'
     : 'idle'
 
   const speakerSet = [...new Set(segments.map(s => s.speaker))]
+  const wordCount  = segments.reduce((n, s) => n + s.text.split(/\s+/).length, 0)
 
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen flex bg-surface-400">
       <Sidebar />
 
+      {/* Processing overlay */}
+      {saving && <ProcessingOverlay step={progressStep} />}
+
       <main className="flex-1 overflow-hidden flex flex-col">
 
-        {/* ── Top bar ──────────────────────────────────────── */}
-        <header className="shrink-0 border-b border-white/8 px-6 py-4 flex items-center justify-between">
+        {/* ── Top bar ───────────────────────────────────────────────────── */}
+        <header className="shrink-0 border-b border-white/8 px-6 py-4 flex items-center justify-between gap-4">
           <div>
             <h1 className="font-display font-bold text-lg text-white">Live Session</h1>
-            <p className="text-xs text-slate-500 mt-0.5">One mic · Any language → English · Fully offline</p>
+            <p className="text-xs text-slate-500 mt-0.5">WebSocket · Any language → English · AI diarization</p>
           </div>
 
-          <div className="flex items-center gap-3">
-            {active && !paused && <Badge variant="success" dot>Recording</Badge>}
-            {active && paused  && <Badge variant="warning" dot>Paused</Badge>}
-            {isSaving          && <Badge variant="processing" dot>Saving…</Badge>}
-            {savedId && !isSaving && (
+          <div className="flex items-center gap-2 flex-wrap justify-end">
+            {/* Session state badges */}
+            {active && !paused && <Badge variant="success"    dot>Recording</Badge>}
+            {active &&  paused && <Badge variant="warning"    dot>Paused</Badge>}
+            {saving            && <Badge variant="processing" dot>Processing…</Badge>}
+            {savedId && !saving && (
               <Badge variant="success">
                 <CheckCircle2 size={11} className="mr-1" /> Saved
               </Badge>
@@ -396,6 +357,7 @@ export default function LiveSessionPage() {
               <Badge variant="default">Session ended</Badge>
             )}
 
+            {/* Timer */}
             {active && (
               <div className="flex items-center gap-1.5 text-sm text-slate-400">
                 <Clock size={13} />
@@ -403,9 +365,10 @@ export default function LiveSessionPage() {
               </div>
             )}
 
-            <div className="flex items-center gap-1.5 text-xs text-emerald-400">
-              <WifiOff size={12} />
-              Offline
+            {/* WebSocket status indicator */}
+            <div className={`flex items-center gap-1.5 text-xs ${connected ? 'text-emerald-400' : 'text-slate-500'}`}>
+              {connected ? <Wifi size={12} /> : <WifiOff size={12} />}
+              {connected ? 'Live' : 'Connecting…'}
             </div>
 
             {/* Voice commands toggle */}
@@ -436,33 +399,42 @@ export default function LiveSessionPage() {
           </div>
         )}
 
-        {/* ── Body ─────────────────────────────────────────── */}
-        <div className="flex-1 overflow-hidden flex gap-0 lg:gap-6 p-6">
+        {/* ── Body ──────────────────────────────────────────────────────── */}
+        <div className="flex-1 overflow-hidden flex gap-6 p-6">
 
-          {/* ── Left: controls + transcript ──────────────── */}
+          {/* ── Left: controls + transcript ──────────────────────────── */}
           <div className="flex-1 flex flex-col gap-4 min-w-0">
 
             {/* Controls */}
             <Card variant="elevated" className="p-6">
-              <div className="flex flex-col items-center gap-6">
-                <RecordButton state={recordState} onClick={toggle} size="lg" />
+              <div className="flex flex-col items-center gap-5">
+                <RecordButton state={recordState} onClick={handleToggle} size="lg" />
                 <div className="w-full"><Waveform active={active && !paused} /></div>
 
                 {active && (
-                  <Button variant="destructive" size="sm" onClick={handleStop}>
+                  <Button variant="destructive" size="sm" onClick={handleStop} disabled={saving}>
                     <Square size={13} className="mr-1.5 fill-current" />
                     End Session
                   </Button>
                 )}
 
+                {/* Errors */}
                 {permissionError && (
                   <p className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2.5 w-full text-center">
                     {permissionError}
                   </p>
                 )}
                 {statusMsg && (
-                  <p className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-2 w-full text-center">
+                  <p className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-2 w-full text-center flex items-center gap-2 justify-center">
+                    <AlertCircle size={13} />
                     {statusMsg}
+                  </p>
+                )}
+
+                {/* WebSocket not connected warning */}
+                {!connected && (
+                  <p className="text-xs text-slate-500 text-center">
+                    Connecting to server… transcription will begin once connected.
                   </p>
                 )}
               </div>
@@ -473,8 +445,8 @@ export default function LiveSessionPage() {
               <div className="shrink-0 flex items-center justify-between px-5 py-4 border-b border-white/8">
                 <div className="flex items-center gap-3">
                   <h2 className="font-semibold text-white text-sm">Transcript</h2>
-                  {processing && <Badge variant="default" dot>Processing</Badge>}
-                  {isSaving   && <Badge variant="processing" dot>Saving…</Badge>}
+                  {processing && active && <Badge variant="default" dot>Live</Badge>}
+                  {saving     && <Badge variant="processing" dot>Processing</Badge>}
                 </div>
 
                 {speakerSet.length > 0 && (
@@ -488,7 +460,7 @@ export default function LiveSessionPage() {
                   </div>
                 )}
 
-                {segments.length > 0 && !active && (
+                {segments.length > 0 && !active && !saving && (
                   <div className="flex items-center gap-2">
                     <button
                       onClick={handleExport}
@@ -513,9 +485,14 @@ export default function LiveSessionPage() {
                   <div className="flex flex-col items-center justify-center h-full text-center py-16">
                     <p className="text-slate-400 text-sm">
                       {active && !paused
-                        ? 'Listening… transcription appears every few seconds'
+                        ? 'Listening… transcript appears every 5 seconds'
                         : 'Start a session to begin transcribing'}
                     </p>
+                    {active && !paused && (
+                      <p className="text-xs text-slate-600 mt-2">
+                        Chunks sent over WebSocket → Groq Whisper → pushed back live
+                      </p>
+                    )}
                   </div>
                 ) : (
                   segments.map(seg => (
@@ -532,16 +509,18 @@ export default function LiveSessionPage() {
             </Card>
           </div>
 
-          {/* ── Right: session info ───────────────────────── */}
+          {/* ── Right: session info ────────────────────────────────────── */}
           <div className="hidden lg:flex flex-col gap-4 w-64 shrink-0">
             <Card variant="elevated" className="p-5 space-y-4">
               <h3 className="text-sm font-semibold text-white">Session Info</h3>
               <div className="space-y-3">
                 {[
-                  { label: 'Duration',  value: formatTime(elapsed) },
-                  { label: 'Segments',  value: segments.length.toString() },
-                  { label: 'Speakers',  value: speakerSet.length ? speakerSet.length.toString() : '—' },
-                  { label: 'Saved',     value: savedId ? 'Yes ✓' : isSaving ? 'Saving…' : '—' },
+                  { label: 'Duration',   value: formatTime(elapsed) },
+                  { label: 'Segments',   value: segments.length.toString() },
+                  { label: 'Speakers',   value: speakerSet.length ? speakerSet.length.toString() : '—' },
+                  { label: 'Words',      value: wordCount.toString() },
+                  { label: 'Transport',  value: connected ? 'WebSocket' : 'Connecting…' },
+                  { label: 'Saved',      value: savedId ? 'Yes ✓' : saving ? 'Processing…' : '—' },
                 ].map(item => (
                   <div key={item.label} className="flex items-center justify-between">
                     <span className="text-xs text-slate-500">{item.label}</span>
@@ -556,9 +535,10 @@ export default function LiveSessionPage() {
               <ul className="space-y-2 text-xs text-slate-500">
                 <li>· Place the mic between both speakers</li>
                 <li>· Speak clearly with short pauses</li>
-                <li>· Transcription runs every 3 seconds</li>
+                <li>· Transcript appears every 5 seconds</li>
+                <li>· Speakers re-labelled every 15 seconds</li>
                 <li>· Session auto-saves when you end</li>
-                <li>· Export available after session ends</li>
+                <li>· AI extraction runs in the background</li>
                 {voiceSupported && (
                   <li className="pt-1 border-t border-white/6 text-brand-400">
                     · Say "start", "stop", "pause", "resume", or "clear"
@@ -566,17 +546,8 @@ export default function LiveSessionPage() {
                 )}
               </ul>
             </Card>
-
-            {segments.length > 0 && (
-              <Card variant="flat" className="p-4">
-                <h3 className="text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wide">Word Count</h3>
-                <p className="text-2xl font-bold text-white">
-                  {segments.reduce((n, s) => n + s.text.split(/\s+/).length, 0)}
-                </p>
-                <p className="text-xs text-slate-500 mt-1">words transcribed</p>
-              </Card>
-            )}
           </div>
+
         </div>
       </main>
     </div>

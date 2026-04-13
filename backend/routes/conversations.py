@@ -3,9 +3,10 @@ Conversation management routes:
   GET    /api/conversations              — list current user's conversations
   POST   /api/conversations              — create & save a new conversation (ASR page)
   GET    /api/conversations/:id          — get single conversation with transcript + summary
+  GET    /api/conversations/:id/status   — lightweight status poll (for background task progress)
   PATCH  /api/conversations/:id          — update title/status
   DELETE /api/conversations/:id          — delete (owner or admin)
-  POST   /api/conversations/:id/complete — finalise a live session
+  POST   /api/conversations/:id/complete — finalise a live session (dispatches background task)
   POST   /api/conversations/:id/audio   — upload & store audio file
   PATCH  /api/conversations/:id/reminders/:rid/resolve — resolve a field reminder
   POST   /api/conversations/:id/recommend             — generate AI clinical insights
@@ -254,15 +255,22 @@ def get_conversation(conv_id: str):
 def complete_conversation(conv_id: str):
     """
     Finalise a live session that was started with /api/session/start.
-    Updates the existing Conversation row (created at session start)
-    and persists the full transcript + any extraction result.
+
+    NEW behaviour (background processing):
+      1. Saves the raw segments to the DB immediately (fast, <100ms).
+      2. Dispatches a Celery task (or daemon thread) to run:
+            diarize → extract medical fields → save summary → generate reminders
+      3. Returns 202 Accepted with { conversation_id, status: "processing" }.
+      4. The frontend polls GET /api/conversations/:id/status every 2s until
+         status changes to "complete" or "failed", then navigates to the detail page.
+
+    This prevents Groq API timeouts from blocking the HTTP response on long sessions.
 
     Body:
-      segments   — full list of { speaker, text, start?, end? }
-      extraction — dict of extracted medical fields (or null)
-      duration   — elapsed seconds
-      language   — detected language
-      title      — session title (optional)
+      segments  — full list of { speaker, text, start?, end? }
+      duration  — elapsed seconds
+      language  — detected language string
+      title     — session title (optional)
     """
     if not _db_available():
         return jsonify({"error": "Database not configured"}), 503
@@ -271,50 +279,73 @@ def complete_conversation(conv_id: str):
 
     conv = Conversation.query.get(conv_id)
     if not conv:
-        # Conversation row may not have been created (e.g. session/start DB error)
-        # Create it now and immediately assign the current user so it shows up in their list
         conv = Conversation(id=conv_id, user_id=user_id, status="processing", is_offline=False)
         db.session.add(conv)
         db.session.flush()
 
-    # Check access — allow if conversation has no owner (anonymous) or owner matches
     if conv.user_id and user_id and conv.user_id != user_id and getattr(g, "user_role", "") != "admin":
         return jsonify({"error": "Access denied"}), 403
 
-    data       = request.get_json() or {}
-    segments   = data.get("segments") or []
-    extraction = data.get("extraction") or {}
-    duration   = data.get("duration")
-    language   = data.get("language") or conv.language or "Unknown"
-    title      = (data.get("title") or "").strip() or _auto_title(segments)
+    data     = request.get_json() or {}
+    segments = data.get("segments") or []
+    duration = data.get("duration")
+    language = (data.get("language") or conv.language or "Unknown")
+    title    = (data.get("title") or "").strip() or _auto_title(segments)
 
     try:
-        # Update conversation metadata
-        conv.status   = "complete"
+        # ── Immediate DB update (synchronous — fast) ──────────────────────
+        conv.status   = "processing"   # signals frontend to poll
         conv.title    = title
-        conv.duration = int(duration) if duration else conv.duration
         conv.language = language
+        conv.duration = int(duration) if duration else conv.duration
         if user_id and not conv.user_id:
             conv.user_id = user_id
 
-        # Remove existing transcript if re-saving (idempotent)
-        if conv.transcript:
-            db.session.delete(conv.transcript)
-            db.session.flush()
-
-        _save_transcript(conv.id, segments, language=language)
-        _save_summary(conv.id, extraction)
-        db.session.flush()
-        if conv.summary:
-            _generate_field_reminders(conv.summary)
-
         db.session.commit()
-        return jsonify({"success": True, "conversation": conv.to_dict()}), 200
+
+        # ── Dispatch background task ──────────────────────────────────────
+        # Runs: diarize → extract → save summary → generate reminders → status=complete
+        from tasks.process_session import dispatch as dispatch_task
+        from flask import current_app
+        task_id = dispatch_task(
+            current_app._get_current_object(),
+            conv_id  = conv_id,
+            segments = segments,
+            language = language,
+            duration = int(duration) if duration else None,
+        )
+
+        return jsonify({
+            "success":         True,
+            "conversation_id": conv_id,
+            "status":          "processing",
+            "task_id":         task_id,
+        }), 202
 
     except Exception as e:
         db.session.rollback()
         print(f"[conversations/complete] error: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+# ── Lightweight status poll ───────────────────────────────────────────────────
+
+@conversations_bp.route("/<string:conv_id>/status", methods=["GET"])
+@optional_auth
+def conversation_status(conv_id: str):
+    """
+    Lightweight endpoint the frontend polls every 2s after /complete returns 202.
+    Returns only { id, status } to keep the payload tiny.
+    """
+    conv = Conversation.query.get(conv_id)
+    if not conv:
+        return jsonify({"error": "Conversation not found"}), 404
+
+    user_id = getattr(g, "user_id", None)
+    if conv.user_id and user_id and conv.user_id != user_id and getattr(g, "user_role", "") != "admin":
+        return jsonify({"error": "Access denied"}), 403
+
+    return jsonify({"id": conv.id, "status": conv.status}), 200
 
 
 # ── Update ───────────────────────────────────────────────────────────────────
