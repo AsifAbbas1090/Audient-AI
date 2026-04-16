@@ -78,6 +78,31 @@ MIGRATIONS = [
       ADD COLUMN IF NOT EXISTS patient_id VARCHAR(36)
       REFERENCES patients(id) ON DELETE SET NULL;
     """,
+    # ── users (doctor profile + branding) ───────────────────────────────────
+    """
+    ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS specialty VARCHAR(50) NOT NULL DEFAULT 'general_mbbs';
+    """,
+    """
+    ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS doctor_title VARCHAR(255);
+    """,
+    """
+    ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS clinic_name VARCHAR(255);
+    """,
+    """
+    ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS license_number VARCHAR(120);
+    """,
+    """
+    ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS signature_url TEXT;
+    """,
+    """
+    ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS logo_url TEXT;
+    """,
     # ── audit_logs / patients — entire tables may be new ──────────────────
     # db.create_all() handles creation below.
 ]

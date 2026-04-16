@@ -7,6 +7,14 @@ import uuid
 from datetime import datetime, timezone
 from extensions import db
 
+SPECIALTY_CHOICES = (
+    "general_mbbs",
+    "general_practice",
+    "cardiology",
+    "psychiatry",
+    "paediatrics",
+)
+
 
 def _uuid() -> str:
     return str(uuid.uuid4())
@@ -28,6 +36,13 @@ class User(db.Model):
 
     process_mode  = db.Column(db.String(10),  nullable=False, default="offline")
     # process_mode: 'online' | 'offline'
+
+    specialty      = db.Column(db.String(50),  nullable=False, default="general_mbbs")
+    doctor_title   = db.Column(db.String(255), nullable=True)
+    clinic_name    = db.Column(db.String(255), nullable=True)
+    license_number = db.Column(db.String(120), nullable=True)
+    signature_url  = db.Column(db.Text,        nullable=True)
+    logo_url       = db.Column(db.Text,        nullable=True)
 
     # Incremented on logout to invalidate all outstanding refresh tokens.
     token_version = db.Column(db.Integer, nullable=False, default=0)
@@ -51,6 +66,12 @@ class User(db.Model):
             "name":         self.name,
             "role":         self.role,
             "process_mode": self.process_mode,
+            "specialty": self.specialty,
+            "doctor_title": self.doctor_title,
+            "clinic_name": self.clinic_name,
+            "license_number": self.license_number,
+            "signature_url": self.signature_url,
+            "logo_url": self.logo_url,
             "created_at":   self.created_at.isoformat() if self.created_at else None,
             "last_login_at": self.last_login_at.isoformat() if self.last_login_at else None,
         }
