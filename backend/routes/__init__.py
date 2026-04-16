@@ -11,6 +11,7 @@ from .extract        import extract_bp
 from .conversations  import conversations_bp
 from .patients       import patients_bp
 from .admin          import admin_bp
+from .users          import users_bp
 
 # Import socket handlers to register @socketio.on decorators
 from . import socket_handlers  # noqa: F401
@@ -25,3 +26,4 @@ def register_blueprints(app):
     app.register_blueprint(conversations_bp)
     app.register_blueprint(patients_bp)
     app.register_blueprint(admin_bp)
+    app.register_blueprint(users_bp)
