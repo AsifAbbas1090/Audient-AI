@@ -38,6 +38,9 @@ Additional Notes: {additional_notes}
 --- TRANSCRIPT ---
 {transcript}
 
+--- SPECIALTY CONTEXT ---
+{specialty_context}
+
 --- INSTRUCTIONS ---
 Return ONLY a valid JSON object with exactly these keys:
 {{
@@ -75,6 +78,7 @@ def _safe_str(val) -> str:
 def generate_recommendations(
     transcript_text: str,
     summary: dict,
+    specialty: str | None = None,
 ) -> Dict[str, Any]:
     """
     Generate clinical recommendations using Groq LLaMA.
@@ -91,6 +95,7 @@ def generate_recommendations(
     """
     from config import Config
     from groq import Groq
+    from services.specialty_service import specialty_prompt_block
 
     if not Config.GROQ_API_KEY:
         raise RuntimeError("GROQ_API_KEY is not set — cannot generate recommendations.")
@@ -103,6 +108,7 @@ def generate_recommendations(
         emotional_state =_safe_str(summary.get("emotional_state")),
         additional_notes=_safe_str(summary.get("additional_notes")),
         transcript      =(transcript_text or "").strip() or "No transcript available.",
+        specialty_context=specialty_prompt_block(specialty),
     )
 
     client = Groq(api_key=Config.GROQ_API_KEY)

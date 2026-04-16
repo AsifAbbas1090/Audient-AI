@@ -24,6 +24,9 @@ Keys (use null for unknown):
 - "EmotionalState"  string or null  (e.g. "Anxious", "Calm")
 - "AdditionalNotes" string or null
 
+Specialty context:
+{specialty_context}
+
 Text:
 {text}"""
 
@@ -41,7 +44,7 @@ def _parse_json(content: str) -> Dict[str, Any]:
     return json.loads(content)
 
 
-def _extract_groq(text: str) -> Dict[str, Any]:
+def _extract_groq(text: str, specialty_context: str) -> Dict[str, Any]:
     """Extract using Groq LLM API."""
     from config import Config
     from groq import Groq
@@ -51,7 +54,10 @@ def _extract_groq(text: str) -> Dict[str, Any]:
         model=Config.GROQ_EXTRACT_MODEL,
         messages=[
             {"role": "system", "content": SYSTEM_MSG},
-            {"role": "user",   "content": EXTRACT_PROMPT.format(text=text)},
+            {
+                "role": "user",
+                "content": EXTRACT_PROMPT.format(text=text, specialty_context=specialty_context),
+            },
         ],
         max_tokens=512,
         temperature=0,
@@ -60,7 +66,7 @@ def _extract_groq(text: str) -> Dict[str, Any]:
     return _parse_json(content)
 
 
-def _extract_ollama(text: str) -> Dict[str, Any]:
+def _extract_ollama(text: str, specialty_context: str) -> Dict[str, Any]:
     """Fallback: extract using Ollama (offline)."""
     from config import Config
     from openai import OpenAI
@@ -70,7 +76,10 @@ def _extract_ollama(text: str) -> Dict[str, Any]:
         model=Config.OLLAMA_EXTRACT_MODEL,
         messages=[
             {"role": "system", "content": SYSTEM_MSG},
-            {"role": "user",   "content": EXTRACT_PROMPT.format(text=text)},
+            {
+                "role": "user",
+                "content": EXTRACT_PROMPT.format(text=text, specialty_context=specialty_context),
+            },
         ],
         max_tokens=512,
         temperature=0,
@@ -92,16 +101,20 @@ Example: ["What was the patient's blood pressure reading today?", "Has the patie
 Extracted fields:
 {extracted}
 
+Specialty context:
+{specialty_context}
+
 Transcript:
 {text}"""
 
 
-def generate_followups(text: str, extracted: Dict[str, Any]) -> list:
+def generate_followups(text: str, extracted: Dict[str, Any], specialty: str | None = None) -> list:
     """
     Generate 3-5 follow-up questions based on transcript + extracted fields.
     Returns a list of question strings, or [] on any error.
     """
     from config import Config
+    from services.specialty_service import specialty_prompt_block
 
     if not Config.GROQ_API_KEY or not text.strip():
         return []
@@ -121,6 +134,7 @@ def generate_followups(text: str, extracted: Dict[str, Any]) -> list:
                 "role": "user",
                 "content": _FOLLOWUP_PROMPT.format(
                     extracted=extracted_str,
+                    specialty_context=specialty_prompt_block(specialty),
                     text=text[:3000],
                 ),
             }],
@@ -136,18 +150,21 @@ def generate_followups(text: str, extracted: Dict[str, Any]) -> list:
     return []
 
 
-def extract(text: str) -> Dict[str, Any]:
+def extract(text: str, specialty: str | None = None) -> Dict[str, Any]:
     """
     Extract structured medical fields from transcript text.
     Uses Groq if GROQ_API_KEY is set, else falls back to Ollama.
     Returns {"skipped": True} if neither is available.
     """
     from config import Config
+    from services.specialty_service import specialty_prompt_block
+
+    specialty_context = specialty_prompt_block(specialty)
 
     # ── Try Groq first ───────────────────────────────────────────
     if Config.GROQ_API_KEY:
         try:
-            return _extract_groq(text)
+            return _extract_groq(text, specialty_context=specialty_context)
         except json.JSONDecodeError as e:
             print(f"[Extract/Groq] JSON parse error: {e}")
             return {"error": "Model did not return valid JSON"}
@@ -157,7 +174,7 @@ def extract(text: str) -> Dict[str, Any]:
 
     # ── Fallback: Ollama ─────────────────────────────────────────
     try:
-        return _extract_ollama(text)
+        return _extract_ollama(text, specialty_context=specialty_context)
     except json.JSONDecodeError as e:
         print(f"[Extract/Ollama] JSON parse error: {e}")
         return {"error": "Model did not return valid JSON"}
