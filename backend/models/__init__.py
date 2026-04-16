@@ -4,6 +4,7 @@ from .conversation import Conversation, AudioFile
 from .transcript import Transcript, TranscriptLine
 from .summary import Summary, FieldReminder
 from .audit_log import AuditLog
+from .template import DoctorTemplate, DoctorTemplateVersion
 
 __all__ = [
     "User",
@@ -15,4 +16,6 @@ __all__ = [
     "Summary",
     "FieldReminder",
     "AuditLog",
+    "DoctorTemplate",
+    "DoctorTemplateVersion",
 ]

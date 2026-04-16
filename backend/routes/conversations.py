@@ -22,6 +22,7 @@ from models.transcript import Transcript, TranscriptLine
 from models.summary import Summary, FieldReminder
 from utils.auth import require_auth, optional_auth
 from utils.audit import log_action
+from services.template_service import get_active_template_version_id
 
 conversations_bp = Blueprint("conversations", __name__, url_prefix="/api/conversations")
 
@@ -220,6 +221,7 @@ def create_conversation():
             duration=int(duration) if duration else None,
             language=language,
             is_offline=False,
+            template_version_id=get_active_template_version_id(user_id),
         )
         db.session.add(conv)
         db.session.flush()
@@ -314,6 +316,8 @@ def complete_conversation(conv_id: str):
         conv.duration = int(duration) if duration else conv.duration
         if user_id and not conv.user_id:
             conv.user_id = user_id
+        if not conv.template_version_id:
+            conv.template_version_id = get_active_template_version_id(conv.user_id or user_id)
 
         db.session.commit()
 
@@ -685,6 +689,7 @@ def continue_session(conv_id: str):
             language=parent.language,
             parent_id=conv_id,
             is_offline=False,
+            template_version_id=get_active_template_version_id(g.user_id),
         )
         db.session.add(cont)
         db.session.commit()

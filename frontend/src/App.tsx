@@ -13,6 +13,7 @@ import SessionDetailPage from './pages/SessionDetailPage'
 import SettingsPage      from './pages/SettingsPage'
 import AnalyticsPage     from './pages/AnalyticsPage'
 import AdminPage         from './pages/AdminPage'
+import TemplateBuilderPage from './pages/TemplateBuilderPage'
 
 export default function App() {
   return (
@@ -30,6 +31,7 @@ export default function App() {
           <Route path="/asr"         element={<ProtectedRoute><ASRPage /></ProtectedRoute>} />
           <Route path="/session/:id" element={<ProtectedRoute><SessionDetailPage /></ProtectedRoute>} />
           <Route path="/settings"    element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
+          <Route path="/templates"   element={<ProtectedRoute><TemplateBuilderPage /></ProtectedRoute>} />
           <Route path="/analytics"   element={<ProtectedRoute><AnalyticsPage /></ProtectedRoute>} />
 
           {/* Admin only */}

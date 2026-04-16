@@ -27,6 +27,30 @@ from extensions import db
 from sqlalchemy import text
 
 MIGRATIONS = [
+    # ── doctor templates (versioned layout + branding snapshots) ───────────
+    """
+    CREATE TABLE IF NOT EXISTS doctor_templates (
+      id VARCHAR(36) PRIMARY KEY,
+      user_id VARCHAR(36) NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+      name VARCHAR(255) NOT NULL DEFAULT 'My Clinical Template',
+      specialty_base VARCHAR(50) NOT NULL DEFAULT 'general_mbbs',
+      schema_json JSON NOT NULL,
+      active_version_id VARCHAR(36),
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS doctor_template_versions (
+      id VARCHAR(36) PRIMARY KEY,
+      template_id VARCHAR(36) NOT NULL REFERENCES doctor_templates(id) ON DELETE CASCADE,
+      version_number INT NOT NULL,
+      schema_json JSON NOT NULL,
+      branding_snapshot_json JSON NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      CONSTRAINT uq_template_version_number UNIQUE (template_id, version_number)
+    );
+    """,
     # ── conversations ──────────────────────────────────────────────────────
     # user_id FK — added after initial schema
     """
@@ -48,6 +72,11 @@ MIGRATIONS = [
     """
     ALTER TABLE conversations
       ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ;
+    """,
+    """
+    ALTER TABLE conversations
+      ADD COLUMN IF NOT EXISTS template_version_id VARCHAR(36)
+      REFERENCES doctor_template_versions(id) ON DELETE SET NULL;
     """,
     # ── audio_files ────────────────────────────────────────────────────────
     # Entire table may not exist — db.create_all() handles that below,

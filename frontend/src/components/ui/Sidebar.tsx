@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from 'react-router-dom'
-import { Mic, Settings, Radio, LayoutDashboard, LineChart, LogOut, Moon, Sun, ShieldCheck } from 'lucide-react'
+import { Mic, Settings, Radio, LayoutDashboard, LineChart, LogOut, Moon, Sun, ShieldCheck, LayoutTemplate } from 'lucide-react'
 import { useTheme } from '../providers/ThemeProvider'
 import { cn } from '../../utils/cn'
 import { logout, isAdmin, getUser } from '../../hooks/useAuth'
@@ -9,6 +9,7 @@ const navItems = [
   { to: '/live',      label: 'Live Session',     icon: Radio           },
   { to: '/asr',       label: 'Record & Extract', icon: Mic             },
   { to: '/analytics', label: 'Analytics',        icon: LineChart       },
+  { to: '/templates', label: 'Templates',        icon: LayoutTemplate  },
   { to: '/settings',  label: 'Settings',         icon: Settings        },
 ]
 

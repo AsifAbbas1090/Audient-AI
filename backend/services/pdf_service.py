@@ -23,7 +23,7 @@ from reportlab.lib.units       import cm
 from reportlab.lib             import colors
 from reportlab.platypus        import (
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
-    HRFlowable, KeepTogether,
+    HRFlowable, KeepTogether, Image,
 )
 from reportlab.lib.enums       import TA_LEFT, TA_CENTER, TA_RIGHT
 
@@ -132,9 +132,25 @@ def generate_session_pdf(conv: "Conversation") -> bytes:
     W       = A4[0] - 4*cm   # usable width
     story   = []
 
+    template_version = getattr(conv, "template_version", None)
+    schema = (template_version.schema_json if template_version else None) or {}
+    sections = schema.get("sections") or []
+    branding = (template_version.branding_snapshot_json if template_version else None) or {}
+    if not branding:
+        user = getattr(conv, "user", None)
+        branding = {
+            "doctor_name": getattr(user, "name", None),
+            "doctor_title": getattr(user, "doctor_title", None),
+            "clinic_name": getattr(user, "clinic_name", None),
+            "license_number": getattr(user, "license_number", None),
+            "signature_url": getattr(user, "signature_url", None),
+            "logo_url": getattr(user, "logo_url", None),
+        }
+    brand_name = branding.get("clinic_name") or branding.get("doctor_name") or "Audient AI"
+
     # ── Header banner ─────────────────────────────────────────────────────────
     header_data = [[
-        Paragraph("Audient AI", st["h_title"]),
+        Paragraph(str(brand_name), st["h_title"]),
         Paragraph(
             "CONFIDENTIAL — CLINICAL SESSION REPORT",
             ParagraphStyle("cfb", parent=st["confidential"],
@@ -148,6 +164,13 @@ def generate_session_pdf(conv: "Conversation") -> bytes:
         ("VALIGN",       (0, 0), (-1, -1), "MIDDLE"),
     ]))
     story.append(header_tbl)
+    logo_path = branding.get("logo_url")
+    if logo_path:
+        try:
+            story.append(Spacer(1, 0.15 * cm))
+            story.append(Image(logo_path, width=3 * cm, height=1.2 * cm))
+        except Exception:
+            pass
     story.append(Spacer(1, 0.3*cm))
 
     # Sub-header: generated date + session ID
@@ -189,31 +212,55 @@ def generate_session_pdf(conv: "Conversation") -> bytes:
     ]))
     story.append(pt)
 
-    # ── Clinical summary ───────────────────────────────────────────────────────
+    # ── Clinical summary (template-aware) ─────────────────────────────────────
     story.append(Spacer(1, 0.3*cm))
     story.append(Paragraph("CLINICAL SUMMARY", st["section"]))
     story.append(HRFlowable(width="100%", thickness=1, color=_BRAND_LIGHT))
     story.append(Spacer(1, 0.2*cm))
 
     if summary:
-        fields = [
-            ("Condition / Diagnosis", summary.disease),
-            ("Emotional State",       summary.emotional_state),
-            ("Education Level",       summary.education),
-            ("Additional Notes",      summary.additional_notes),
+        source_map = {
+            "patient_name": summary.patient_name,
+            "patient_age": summary.patient_age,
+            "patient_gender": summary.patient_gender,
+            "disease": summary.disease,
+            "education": summary.education,
+            "emotional_state": summary.emotional_state,
+            "additional_notes": summary.additional_notes,
+            "follow_up_questions": summary.follow_up_questions or [],
+        }
+        if isinstance(summary.extracted_entities, dict):
+            source_map.update(summary.extracted_entities)
+        ordered_sections = sections or [
+            {"label": "Condition / Diagnosis", "source_key": "disease", "visible": True},
+            {"label": "Emotional State", "source_key": "emotional_state", "visible": True},
+            {"label": "Education Level", "source_key": "education", "visible": True},
+            {"label": "Additional Notes", "source_key": "additional_notes", "visible": True},
         ]
-        for label, val in fields:
-            if val and str(val).strip():
-                row = Table(
-                    [[Paragraph(label, st["label"]), Paragraph(str(val), st["notes"])]],
-                    colWidths=[W * 0.22, W * 0.78],
-                )
-                row.setStyle(TableStyle([
-                    ("ROWPADDING",   (0, 0), (-1, -1), 4),
-                    ("VALIGN",       (0, 0), (-1, -1), "TOP"),
-                    ("LINEBELOW",    (0, 0), (-1, 0), 0.3, colors.HexColor("#f3f4f6")),
-                ]))
-                story.append(row)
+        for section in ordered_sections:
+            if not section.get("visible", True):
+                continue
+            source_key = section.get("source_key")
+            if source_key == "transcript":
+                continue
+            label = section.get("label") or source_key or "Section"
+            val = source_map.get(source_key)
+            if source_key == "follow_up_questions":
+                if not val:
+                    continue
+                val = " • ".join([str(x) for x in val])
+            if not val or not str(val).strip():
+                continue
+            row = Table(
+                [[Paragraph(str(label), st["label"]), Paragraph(str(val), st["notes"])]],
+                colWidths=[W * 0.22, W * 0.78],
+            )
+            row.setStyle(TableStyle([
+                ("ROWPADDING",   (0, 0), (-1, -1), 4),
+                ("VALIGN",       (0, 0), (-1, -1), "TOP"),
+                ("LINEBELOW",    (0, 0), (-1, 0), 0.3, colors.HexColor("#f3f4f6")),
+            ]))
+            story.append(row)
     else:
         story.append(Paragraph("No clinical summary available.", st["label"]))
 
@@ -258,12 +305,30 @@ def generate_session_pdf(conv: "Conversation") -> bytes:
     story.append(Spacer(1, 0.5*cm))
     story.append(HRFlowable(width="100%", thickness=0.5, color=_BRAND_LIGHT))
     story.append(Spacer(1, 0.2*cm))
-    story.append(Paragraph(
-        "Generated by <b>Audient AI</b> — AI-powered medical transcription system. "
+    signature_path = branding.get("signature_url")
+    if signature_path:
+        try:
+            story.append(Spacer(1, 0.15 * cm))
+            story.append(Image(signature_path, width=4 * cm, height=1.5 * cm))
+        except Exception:
+            pass
+    signer_line = " ".join(
+        x for x in [
+            branding.get("doctor_name"),
+            f"({branding.get('doctor_title')})" if branding.get("doctor_title") else None,
+        ] if x
+    )
+    creds = branding.get("license_number")
+    footer_text = (
+        f"Generated by <b>{brand_name}</b> — AI-assisted clinical documentation. "
         "This document is confidential and intended for authorized medical personnel only. "
-        "AI-extracted fields should be verified by the clinician before clinical use.",
-        st["footer"],
-    ))
+        "AI-extracted fields should be verified by the clinician before clinical use."
+    )
+    if signer_line:
+        footer_text += f" Signed by: {signer_line}."
+    if creds:
+        footer_text += f" License: {creds}."
+    story.append(Paragraph(footer_text, st["footer"]))
 
     doc.build(story)
     return buf.getvalue()

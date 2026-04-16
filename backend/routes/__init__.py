@@ -12,6 +12,7 @@ from .conversations  import conversations_bp
 from .patients       import patients_bp
 from .admin          import admin_bp
 from .users          import users_bp
+from .templates      import templates_bp
 
 # Import socket handlers to register @socketio.on decorators
 from . import socket_handlers  # noqa: F401
@@ -27,3 +28,4 @@ def register_blueprints(app):
     app.register_blueprint(patients_bp)
     app.register_blueprint(admin_bp)
     app.register_blueprint(users_bp)
+    app.register_blueprint(templates_bp)
