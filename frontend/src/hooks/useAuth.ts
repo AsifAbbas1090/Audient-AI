@@ -11,6 +11,12 @@ export type AuthUser = {
   email:        string
   role:         'healthcare' | 'admin'
   process_mode: 'online' | 'offline'
+  specialty?:   string
+  doctor_title?: string | null
+  clinic_name?: string | null
+  license_number?: string | null
+  signature_url?: string | null
+  logo_url?: string | null
   created_at?:  string
 }
 

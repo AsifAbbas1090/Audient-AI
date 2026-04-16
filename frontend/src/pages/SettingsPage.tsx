@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   Moon, Sun, Server, Mic2, Brain, ShieldCheck,
   Globe, Save, RotateCcw,
@@ -12,6 +12,15 @@ import { Badge }      from '../components/ui/Badge'
 import { useTheme }   from '../components/providers/ThemeProvider'
 import { getUser }    from '../hooks/useAuth'
 import { useToast }   from '../components/ui/Toaster'
+import api from '../lib/api'
+
+const SPECIALTY_OPTIONS = [
+  { value: 'general_mbbs', label: 'General MBBS' },
+  { value: 'general_practice', label: 'General Practice' },
+  { value: 'cardiology', label: 'Cardiology' },
+  { value: 'psychiatry', label: 'Psychiatry' },
+  { value: 'paediatrics', label: 'Paediatrics' },
+]
 
 export default function SettingsPage() {
   const { theme, toggle } = useTheme()
@@ -25,11 +34,87 @@ export default function SettingsPage() {
   const [diarize,       setDiarize]       = useState(true)
   const [translate,     setTranslate]     = useState(true)
   const [saved,         setSaved]         = useState(false)
+  const [saving,        setSaving]        = useState(false)
+  const [uploadingAsset, setUploadingAsset] = useState<'signature' | 'logo' | null>(null)
 
-  const handleSave = () => {
-    setSaved(true)
-    toast('Settings saved', 'success')
-    setTimeout(() => setSaved(false), 2000)
+  const [specialty, setSpecialty] = useState(user?.specialty ?? 'general_mbbs')
+  const [doctorTitle, setDoctorTitle] = useState(user?.doctor_title ?? '')
+  const [clinicName, setClinicName] = useState(user?.clinic_name ?? '')
+  const [licenseNumber, setLicenseNumber] = useState(user?.license_number ?? '')
+  const [signatureUrl, setSignatureUrl] = useState(user?.signature_url ?? '')
+  const [logoUrl, setLogoUrl] = useState(user?.logo_url ?? '')
+
+  useEffect(() => {
+    api.get('/api/users/me/preferences')
+      .then(res => {
+        const pref = res.data?.preferences
+        if (!pref) return
+        localStorage.setItem('auth', JSON.stringify(pref))
+        setSpecialty(pref.specialty ?? 'general_mbbs')
+        setDoctorTitle(pref.doctor_title ?? '')
+        setClinicName(pref.clinic_name ?? '')
+        setLicenseNumber(pref.license_number ?? '')
+        setSignatureUrl(pref.signature_url ?? '')
+        setLogoUrl(pref.logo_url ?? '')
+      })
+      .catch(() => {
+        // Keep local snapshot when endpoint temporarily fails.
+      })
+  }, [])
+
+  const handleSave = async () => {
+    setSaving(true)
+    try {
+      const res = await api.patch('/api/users/me/preferences', {
+        specialty,
+        doctor_title: doctorTitle,
+        clinic_name: clinicName,
+        license_number: licenseNumber,
+      })
+      const updated = res.data?.preferences
+      if (updated) {
+        localStorage.setItem('auth', JSON.stringify(updated))
+        setSpecialty(updated.specialty ?? specialty)
+        setDoctorTitle(updated.doctor_title ?? '')
+        setClinicName(updated.clinic_name ?? '')
+        setLicenseNumber(updated.license_number ?? '')
+        setSignatureUrl(updated.signature_url ?? '')
+        setLogoUrl(updated.logo_url ?? '')
+      }
+      setSaved(true)
+      toast('Settings saved', 'success')
+      setTimeout(() => setSaved(false), 2000)
+    } catch {
+      toast('Could not save settings', 'error')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const uploadAsset = async (assetType: 'signature' | 'logo', file: File | null) => {
+    if (!file) return
+    const fd = new FormData()
+    fd.append('asset_type', assetType)
+    fd.append('file', file)
+
+    setUploadingAsset(assetType)
+    try {
+      const res = await api.post('/api/users/me/preferences/assets', fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      const updated = res.data?.preferences
+      if (updated) {
+        localStorage.setItem('auth', JSON.stringify(updated))
+        setSignatureUrl(updated.signature_url ?? '')
+        setLogoUrl(updated.logo_url ?? '')
+      }
+      toast(`${assetType === 'signature' ? 'Signature' : 'Logo'} uploaded`, 'success')
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || 'Upload failed'
+      toast(msg, 'error')
+    } finally {
+      setUploadingAsset(null)
+    }
   }
 
   return (
@@ -44,7 +129,7 @@ export default function SettingsPage() {
             <h1 className="font-display font-bold text-lg text-white">Settings</h1>
             <p className="text-xs text-slate-500 mt-0.5">Configure models, appearance, and preferences</p>
           </div>
-          <Button size="sm" onClick={handleSave} glow={saved}>
+          <Button size="sm" onClick={handleSave} glow={saved} loading={saving}>
             {saved ? <><RotateCcw size={13} /> Saved!</> : <><Save size={13} /> Save changes</>}
           </Button>
         </header>
@@ -67,6 +152,82 @@ export default function SettingsPage() {
                 {user?.role ?? 'healthcare'}
               </Badge>
             </div>
+          </Card>
+
+          {/* ── Doctor profile + branding ─────────────────── */}
+          <Card variant="elevated" className="p-5 space-y-4">
+            <div className="flex items-center gap-2">
+              <ShieldCheck size={15} className="text-brand-400" />
+              <h2 className="font-semibold text-white text-sm">Doctor Profile & Branding</h2>
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-2">Specialty</label>
+              <select
+                value={specialty}
+                onChange={e => setSpecialty(e.target.value)}
+                className="h-11 w-full rounded-xl text-sm bg-white/5 border border-white/10 text-slate-100 px-4 focus:outline-none focus:ring-2 focus:ring-brand-500"
+              >
+                {SPECIALTY_OPTIONS.map(opt => (
+                  <option key={opt.value} value={opt.value} className="bg-slate-900">
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <Input
+                label="Doctor title"
+                value={doctorTitle}
+                onChange={e => setDoctorTitle(e.target.value)}
+                placeholder="e.g. Consultant Cardiologist"
+              />
+              <Input
+                label="Clinic name"
+                value={clinicName}
+                onChange={e => setClinicName(e.target.value)}
+                placeholder="e.g. City Care Clinic"
+              />
+            </div>
+
+            <Input
+              label="License number"
+              value={licenseNumber}
+              onChange={e => setLicenseNumber(e.target.value)}
+              placeholder="Medical license / registration number"
+            />
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-2">Signature (png/jpg/webp, max 2MB)</label>
+                <input
+                  type="file"
+                  accept=".png,.jpg,.jpeg,.webp"
+                  onChange={e => uploadAsset('signature', e.target.files?.[0] ?? null)}
+                  className="block w-full text-xs text-slate-400 file:mr-3 file:rounded-lg file:border-0 file:bg-brand-500/20 file:px-3 file:py-2 file:text-slate-100"
+                />
+                <p className="text-[11px] text-slate-600 mt-1 break-all">
+                  {signatureUrl ? `Saved: ${signatureUrl}` : 'No signature uploaded yet.'}
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-2">Clinic logo (png/jpg/webp, max 2MB)</label>
+                <input
+                  type="file"
+                  accept=".png,.jpg,.jpeg,.webp"
+                  onChange={e => uploadAsset('logo', e.target.files?.[0] ?? null)}
+                  className="block w-full text-xs text-slate-400 file:mr-3 file:rounded-lg file:border-0 file:bg-brand-500/20 file:px-3 file:py-2 file:text-slate-100"
+                />
+                <p className="text-[11px] text-slate-600 mt-1 break-all">
+                  {logoUrl ? `Saved: ${logoUrl}` : 'No logo uploaded yet.'}
+                </p>
+              </div>
+            </div>
+            {uploadingAsset && (
+              <p className="text-xs text-slate-500">Uploading {uploadingAsset}...</p>
+            )}
           </Card>
 
           {/* ── Appearance ───────────────────────────────── */}
