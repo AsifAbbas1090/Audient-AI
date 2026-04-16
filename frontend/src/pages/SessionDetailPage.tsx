@@ -6,7 +6,7 @@ import {
   Calendar, HeartPulse, BookOpen, Smile, StickyNote,
   Pencil, X, Check, Plus, Lock, ShieldCheck, Bell,
   Sparkles, FlaskConical, Stethoscope, TriangleAlert, RefreshCw,
-  UserSearch, UserPlus, Phone, Link2, Unlink,
+  UserSearch, UserPlus, Phone, Link2, Unlink, LayoutTemplate,
 } from 'lucide-react'
 import { Sidebar }       from '../components/ui/Sidebar'
 import { Button }        from '../components/ui/Button'
@@ -67,6 +67,14 @@ interface Patient {
   medical_history: string | null
 }
 
+interface TemplateVersionInfo {
+  id:              string
+  template_id:     string
+  template_name:   string | null
+  version_number:  number
+  created_at:      string | null
+}
+
 interface Conversation {
   id:          string
   title:       string | null
@@ -77,6 +85,8 @@ interface Conversation {
   approved_at: string | null
   patient_id:  string | null
   parent_id?:  string | null
+  template_version_id?: string | null
+  template_version?: TemplateVersionInfo | null
   patient?:    Patient | null
   transcript?: {
     raw_text:   string | null
@@ -627,6 +637,21 @@ export default function SessionDetailPage() {
                   <Calendar size={11} className="text-slate-500" />
                   {new Date(conv.created_at).toLocaleDateString()}
                 </div>
+                {conv.template_version && (
+                  <div
+                    className="flex items-center gap-1.5 text-xs text-slate-400 bg-white/4 border border-white/8 rounded-full px-3 py-1.5 max-w-[min(100%,20rem)]"
+                    title={
+                      conv.template_version.created_at
+                        ? `Template version locked at ${formatDate(conv.template_version.created_at)}`
+                        : 'Template version used for this session'
+                    }
+                  >
+                    <LayoutTemplate size={11} className="text-slate-500 shrink-0" />
+                    <span className="truncate">
+                      {conv.template_version.template_name ?? 'Template'} · v{conv.template_version.version_number}
+                    </span>
+                  </div>
+                )}
               </div>
 
               {/* Transcript card */}

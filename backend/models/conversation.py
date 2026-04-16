@@ -55,6 +55,12 @@ class Conversation(db.Model):
         nullable=True,
         index=True,
     )
+    template_version_id = db.Column(
+        db.String(36),
+        db.ForeignKey("doctor_template_versions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     # One-to-one relationships (cascade delete children with parent)
     audio_file = db.relationship(
@@ -66,6 +72,7 @@ class Conversation(db.Model):
     summary = db.relationship(
         "Summary", backref="conversation", uselist=False, cascade="all, delete-orphan"
     )
+    template_version = db.relationship("DoctorTemplateVersion", foreign_keys=[template_version_id])
 
     def to_dict(self) -> dict:
         return {
@@ -83,11 +90,28 @@ class Conversation(db.Model):
             "patient_id":  self.patient_id,
             "patient_name": self.patient.name if self.patient else None,
             "parent_id":   self.parent_id,
+            "template_version_id": self.template_version_id,
+        }
+
+    def template_version_public_dict(self) -> dict | None:
+        """Lightweight template version metadata for API (no full schema dump)."""
+        tv = self.template_version
+        if not tv:
+            return None
+        tmpl = getattr(tv, "template", None)
+        template_name = tmpl.name if tmpl else None
+        return {
+            "id": tv.id,
+            "template_id": tv.template_id,
+            "template_name": template_name,
+            "version_number": tv.version_number,
+            "created_at": tv.created_at.isoformat() if tv.created_at else None,
         }
 
     def to_dict_full(self) -> dict:
         """Full representation including nested transcript, summary, audio, patient."""
         data = self.to_dict()
+        data["template_version"] = self.template_version_public_dict()
         if self.transcript:
             data["transcript"] = self.transcript.to_dict_full()
         if self.summary:
