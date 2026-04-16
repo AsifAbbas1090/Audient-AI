@@ -608,7 +608,8 @@ def recommend(conv_id: str):
 
     try:
         from services.recommend_service import generate_recommendations
-        recs = generate_recommendations(transcript_text, summary_data)
+        specialty = conv.user.specialty if conv.user else None
+        recs = generate_recommendations(transcript_text, summary_data, specialty=specialty)
         return jsonify({"recommendations": recs}), 200
     except RuntimeError as e:
         return jsonify({"error": str(e)}), 503

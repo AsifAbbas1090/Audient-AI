@@ -55,7 +55,8 @@ def process_session_task(
 
         # ── Step 2: extract medical fields ───────────────────────────────
         raw_text  = " ".join((s.get("text") or "").strip() for s in segments if s.get("text"))
-        extraction = extract(raw_text) if raw_text.strip() else {}
+        specialty = conv.user.specialty if conv.user else None
+        extraction = extract(raw_text, specialty=specialty) if raw_text.strip() else {}
 
         # ── Step 3: persist transcript ───────────────────────────────────
         # Remove any existing transcript (idempotent re-save)
@@ -69,7 +70,7 @@ def process_session_task(
             if conv.summary:
                 db.session.delete(conv.summary)
                 db.session.flush()
-            followups = generate_followups(raw_text, extraction)
+            followups = generate_followups(raw_text, extraction, specialty=specialty)
             _save_summary(conv_id, extraction, followups=followups)
 
         db.session.flush()
