@@ -9,6 +9,8 @@ from typing import Any
 from extensions import db
 from models.template import DoctorTemplate, DoctorTemplateVersion
 from models.user import User
+from services.specialty_service import normalize_specialty
+from services.pdf_theme import default_theme_dict, validate_clean_theme
 
 # Known Summary / PDF / UI source keys (plus transcript block).
 _ALLOWED_SOURCE_KEYS = frozenset({
@@ -21,7 +23,10 @@ _ALLOWED_SOURCE_KEYS = frozenset({
     "additional_notes",
     "follow_up_questions",
     "transcript",
+    "patient_facing_summary",
 })
+
+TEMPLATE_PURPOSES = frozenset({"clinical", "patient_facing"})
 
 # Custom keys stored in extracted_entities JSON: snake_case, 1–64 chars.
 _CUSTOM_SOURCE_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
@@ -31,18 +36,84 @@ _MAX_SECTIONS = 40
 
 def default_template_schema(specialty: str) -> dict[str, Any]:
     # Keep source keys aligned with existing Summary fields to avoid breaking current data flow.
+    spec = normalize_specialty(specialty)
+
+    disease_label = {
+        "cardiology": "CV diagnosis / chief cardiac concern",
+        "psychiatry": "Primary psychiatric diagnosis / concern",
+        "paediatrics": "Diagnosis / developmental concern",
+        "general_practice": "Reason for visit / working diagnosis",
+        "general_mbbs": "Condition / Diagnosis",
+    }.get(spec, "Condition / Diagnosis")
+
+    notes_label = {
+        "psychiatry": "MSE, risk, medications, plan",
+        "cardiology": "Meds, vitals, tests, procedures, plan",
+        "paediatrics": "Growth, immunizations, caregiver instructions",
+        "general_practice": "Chronic problems, referrals, patient goals",
+    }.get(spec, "Additional Notes")
+
+    follow_label = {
+        "psychiatry": "Risk review & follow-up questions",
+        "cardiology": "CV follow-up questions",
+        "paediatrics": "Paediatric follow-up questions",
+    }.get(spec, "Follow-up Questions")
+
+    emotional_visible = spec == "psychiatry"
+    education_visible = spec in ("paediatrics", "general_mbbs", "general_practice")
+
     base_sections = [
         {"id": "patient_name", "label": "Patient Name", "source_key": "patient_name", "visible": True},
         {"id": "patient_age", "label": "Age", "source_key": "patient_age", "visible": True},
         {"id": "patient_gender", "label": "Gender", "source_key": "patient_gender", "visible": True},
-        {"id": "disease", "label": "Condition / Diagnosis", "source_key": "disease", "visible": True},
-        {"id": "emotional_state", "label": "Emotional State", "source_key": "emotional_state", "visible": specialty == "psychiatry"},
-        {"id": "education", "label": "Education", "source_key": "education", "visible": specialty in ("paediatrics", "general_mbbs")},
-        {"id": "additional_notes", "label": "Additional Notes", "source_key": "additional_notes", "visible": True},
-        {"id": "follow_up_questions", "label": "Follow-up Questions", "source_key": "follow_up_questions", "visible": True},
-        {"id": "transcript", "label": "Transcript", "source_key": "transcript", "visible": True},
+        {"id": "disease", "label": disease_label, "source_key": "disease", "visible": True},
+        {"id": "emotional_state", "label": "Emotional State / MSE cues", "source_key": "emotional_state", "visible": emotional_visible},
+        {"id": "education", "label": "Education", "source_key": "education", "visible": education_visible},
+        {"id": "additional_notes", "label": notes_label, "source_key": "additional_notes", "visible": True},
+        {"id": "follow_up_questions", "label": follow_label, "source_key": "follow_up_questions", "visible": True},
+        {"id": "transcript", "label": "Transcript", "source_key": "transcript", "visible": False},
     ]
-    return {"sections": base_sections}
+    return {"sections": base_sections, "theme": default_theme_dict()}
+
+
+def default_patient_facing_schema(specialty: str) -> dict[str, Any]:
+    """Default layout for patient-facing PDFs (plain-language block + optional identity)."""
+    spec = normalize_specialty(specialty)
+    pfs_label = {
+        "psychiatry": "After-visit summary (supportive, clear)",
+        "cardiology": "After-visit summary (heart health)",
+        "paediatrics": "After-visit summary (for parents / guardians)",
+        "general_practice": "After-visit summary (what we agreed today)",
+        "general_mbbs": "After-visit summary (patient)",
+    }.get(spec, "After-visit summary (patient)")
+    return {
+        "sections": [
+            {
+                "id": "pfs",
+                "label": pfs_label,
+                "source_key": "patient_facing_summary",
+                "visible": True,
+            },
+            {
+                "id": "pn",
+                "label": "Name on file",
+                "source_key": "patient_name",
+                "visible": True,
+            },
+            {
+                "id": "tr",
+                "label": "Visit conversation (full text)",
+                "source_key": "transcript",
+                "visible": False,
+            },
+        ],
+        "theme": {"layout": "classic_blue"},
+    }
+
+
+def normalize_purpose(raw: str | None) -> str:
+    v = (raw or "clinical").strip().lower()
+    return v if v in TEMPLATE_PURPOSES else "clinical"
 
 
 def validate_schema(schema: dict[str, Any]) -> dict[str, Any]:
@@ -94,7 +165,8 @@ def validate_schema(schema: dict[str, Any]) -> dict[str, Any]:
     if not any(s["visible"] for s in clean_sections):
         raise ValueError("At least one section must be visible")
 
-    return {"sections": clean_sections}
+    clean_theme = validate_clean_theme(schema.get("theme"))
+    return {"sections": clean_sections, "theme": clean_theme}
 
 
 def validate_schema_for_draft(schema: dict[str, Any]) -> dict[str, Any]:
@@ -142,7 +214,8 @@ def validate_schema_for_draft(schema: dict[str, Any]) -> dict[str, Any]:
             "visible": bool(sec.get("visible", True)),
         })
 
-    return {"sections": clean_sections}
+    clean_theme = validate_clean_theme(schema.get("theme"))
+    return {"sections": clean_sections, "theme": clean_theme}
 
 
 def build_branding_snapshot(user: User) -> dict[str, Any]:
@@ -157,17 +230,26 @@ def build_branding_snapshot(user: User) -> dict[str, Any]:
     }
 
 
-def get_or_create_user_template(user: User) -> DoctorTemplate:
-    tmpl = DoctorTemplate.query.filter_by(user_id=user.id).first()
+def get_or_create_user_template(user: User, purpose: str = "clinical") -> DoctorTemplate:
+    purpose = normalize_purpose(purpose)
+    tmpl = DoctorTemplate.query.filter_by(user_id=user.id, purpose=purpose).first()
     if tmpl:
         return tmpl
 
-    schema = default_template_schema(user.specialty or "general_mbbs")
+    spec = user.specialty or "general_mbbs"
+    if purpose == "patient_facing":
+        schema = default_patient_facing_schema(spec)
+        name = "Patient-facing summary"
+    else:
+        schema = default_template_schema(spec)
+        name = "My Clinical Template"
+
     tmpl = DoctorTemplate(
         user_id=user.id,
-        specialty_base=user.specialty or "general_mbbs",
+        purpose=purpose,
+        specialty_base=spec,
         schema_json=schema,
-        name="My Clinical Template",
+        name=name,
     )
     db.session.add(tmpl)
     db.session.flush()
@@ -185,19 +267,26 @@ def get_or_create_user_template(user: User) -> DoctorTemplate:
     return tmpl
 
 
-def get_active_template_version_id(user_id: str | None) -> str | None:
+def get_active_template_version_id(user_id: str | None, purpose: str = "clinical") -> str | None:
     if not user_id:
         return None
     user = User.query.get(user_id)
     if not user:
         return None
-    tmpl = get_or_create_user_template(user)
+    purpose = normalize_purpose(purpose)
+    tmpl = get_or_create_user_template(user, purpose=purpose)
     if not tmpl.active_version_id:
         # Defensive: publish from current draft if active missing.
+        spec = user.specialty or "general_mbbs"
+        fallback_schema = (
+            default_patient_facing_schema(spec)
+            if purpose == "patient_facing"
+            else default_template_schema(spec)
+        )
         version = DoctorTemplateVersion(
             template_id=tmpl.id,
             version_number=1,
-            schema_json=tmpl.schema_json or default_template_schema(user.specialty or "general_mbbs"),
+            schema_json=tmpl.schema_json or fallback_schema,
             branding_snapshot_json=build_branding_snapshot(user),
         )
         db.session.add(version)
