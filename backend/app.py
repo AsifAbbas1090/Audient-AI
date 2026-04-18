@@ -68,9 +68,10 @@ def create_app() -> Flask:
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
         return response
 
-    @app.route("/api/<path:_>", methods=["OPTIONS"])
-    def _options_handler(_):
-        return "", 200
+    # NOTE: Do not register a catch-all `/api/<path>` OPTIONS route — it matches every
+    # `/api/...` URL but only allows OPTIONS, so POST to real routes can incorrectly
+    # return 405 if a more specific blueprint route is missing (e.g. old server code).
+    # flask-cors above already handles OPTIONS for `/api/*`.
 
     # ── Rate Limiter ────────────────────────────────────────────────────────
     # Use Redis when available so limits persist across restarts and are

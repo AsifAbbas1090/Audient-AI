@@ -39,6 +39,7 @@ def process_session_task(
         _save_summary,
         _generate_field_reminders,
         _auto_title,
+        _fill_patient_facing_summary,
     )
 
     conv = Conversation.query.get(conv_id)
@@ -75,6 +76,7 @@ def process_session_task(
 
         db.session.flush()
         if conv.summary:
+            _fill_patient_facing_summary(conv, raw_text)
             _generate_field_reminders(conv.summary)
 
         # ── Step 5: mark complete ─────────────────────────────────────────

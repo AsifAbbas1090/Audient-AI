@@ -6,7 +6,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from flask import Blueprint, jsonify, request, g
+from flask import Blueprint, jsonify, request, g, send_from_directory
 from werkzeug.utils import secure_filename
 
 from config import Config
@@ -34,6 +34,40 @@ def _normalize_specialty(raw: str | None) -> str:
         return "general_mbbs"
     key = str(raw).strip().lower().replace(" ", "_")
     return key if key in SPECIALTY_CHOICES else "general_mbbs"
+
+
+@users_bp.route("/search", methods=["GET"])
+@require_auth
+def search_users():
+    """
+    Search healthcare users by name or email — used by the access grant and consult UIs.
+    Returns up to 20 results, excluding the calling user.
+    """
+    q     = (request.args.get("q") or "").strip()
+    limit = min(int(request.args.get("limit", 20)), 50)
+
+    from models.user import User
+    query = User.query.filter(User.role == "healthcare", User.id != g.user_id)
+    if q:
+        like = f"%{q}%"
+        query = query.filter(
+            db.or_(User.name.ilike(like), User.email.ilike(like))
+        )
+
+    users = query.order_by(User.name.asc()).limit(limit).all()
+    return jsonify({
+        "users": [
+            {
+                "id":           u.id,
+                "name":         u.name,
+                "email":        u.email,
+                "specialty":    u.specialty,
+                "doctor_title": u.doctor_title,
+                "clinic_name":  u.clinic_name,
+            }
+            for u in users
+        ]
+    }), 200
 
 
 @users_bp.route("/me/preferences", methods=["GET"])
@@ -106,10 +140,12 @@ def upload_branding_asset():
     disk_path = os.path.join(asset_dir, f"{asset_type}{ext}")
     file.save(disk_path)
 
+    # Store a serveable URL path so the frontend can use it as <img src>
+    url_path = f"/api/users/branding/{user.id}/{asset_type}{ext}"
     if asset_type == "signature":
-        user.signature_url = disk_path
+        user.signature_url = url_path
     else:
-        user.logo_url = disk_path
+        user.logo_url = url_path
 
     try:
         db.session.commit()
@@ -119,6 +155,13 @@ def upload_branding_asset():
 
     return jsonify({
         "asset_type": asset_type,
-        "path": disk_path,
+        "url": url_path,
         "preferences": user.to_dict(),
     }), 201
+
+
+@users_bp.route("/branding/<user_id>/<filename>", methods=["GET"])
+def serve_branding_asset(user_id, filename):
+    """Serve uploaded signature/logo images so the browser can preview them."""
+    asset_dir = os.path.join(Config.SESSIONS_DIR, "branding", user_id)
+    return send_from_directory(asset_dir, filename)

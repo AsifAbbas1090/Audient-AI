@@ -52,11 +52,14 @@ def register():
     if not _db_available():
         return jsonify({"error": "Database not configured — set DATABASE_URL in .env"}), 503
 
-    data     = request.get_json() or {}
-    name     = (data.get("name") or "").strip()
-    email    = (data.get("email") or "").strip().lower()
-    password = data.get("password") or ""
-    role     = data.get("role", "healthcare")
+    data         = request.get_json() or {}
+    name         = (data.get("name") or "").strip()
+    email        = (data.get("email") or "").strip().lower()
+    password     = data.get("password") or ""
+    role         = data.get("role", "healthcare")
+    specialty    = (data.get("specialty") or "general_mbbs").strip()
+    doctor_title = (data.get("doctor_title") or "").strip() or None
+    clinic_name  = (data.get("clinic_name") or "").strip() or None
 
     errors = {}
     if not name:
@@ -67,6 +70,9 @@ def register():
         errors["password"] = "Password must be at least 6 characters."
     if role not in ("healthcare", "admin"):
         role = "healthcare"
+    _valid_specialties = {"general_mbbs", "general_practice", "cardiology", "psychiatry", "paediatrics"}
+    if specialty not in _valid_specialties:
+        specialty = "general_mbbs"
     if errors:
         return jsonify({"error": "Validation failed", "fields": errors}), 422
 
@@ -79,6 +85,9 @@ def register():
             email         = email,
             password_hash = hash_password(password),
             role          = role,
+            specialty     = specialty,
+            doctor_title  = doctor_title,
+            clinic_name   = clinic_name,
         )
         db.session.add(user)
         db.session.commit()

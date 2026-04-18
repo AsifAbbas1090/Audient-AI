@@ -27,6 +27,8 @@ Keys (use null for unknown):
 Specialty context:
 {specialty_context}
 
+Apply this specialty when choosing emphasis: reflect it in Disease wording, EmotionalState (if used), and especially AdditionalNotes (medications, risk, follow-up). Do not ignore the specialty guidance above.
+
 Text:
 {text}"""
 

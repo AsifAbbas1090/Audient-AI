@@ -23,6 +23,27 @@ from models.summary import Summary, FieldReminder
 from utils.auth import require_auth, optional_auth
 from utils.audit import log_action
 from services.template_service import get_active_template_version_id
+from services.patient_facing_service import generate_patient_facing_summary
+
+
+def _fill_patient_facing_summary(conv: Conversation, transcript_text: str) -> None:
+    """Populate lay-language patient summary when Groq is available (or fallback)."""
+    if not conv.summary:
+        return
+    specialty = conv.user.specialty if conv.user else None
+    s = conv.summary
+    summary_data = {
+        "patient_name": s.patient_name,
+        "patient_age": s.patient_age,
+        "patient_gender": s.patient_gender,
+        "disease": s.disease,
+        "education": s.education,
+        "emotional_state": s.emotional_state,
+        "additional_notes": s.additional_notes,
+    }
+    s.patient_facing_summary = generate_patient_facing_summary(
+        transcript_text, summary_data, specialty=specialty
+    )
 
 conversations_bp = Blueprint("conversations", __name__, url_prefix="/api/conversations")
 
@@ -222,6 +243,7 @@ def create_conversation():
             language=language,
             is_offline=False,
             template_version_id=get_active_template_version_id(user_id),
+            patient_template_version_id=get_active_template_version_id(user_id, "patient_facing"),
         )
         db.session.add(conv)
         db.session.flush()
@@ -230,6 +252,8 @@ def create_conversation():
         _save_summary(conv.id, extraction)
         db.session.flush()  # ensure summary.id is set before generating reminders
         if conv.summary:
+            raw_for_patient = " ".join((s.get("text") or "").strip() for s in segments if s.get("text"))
+            _fill_patient_facing_summary(conv, raw_for_patient)
             _generate_field_reminders(conv.summary)
 
         log_action("session_created", "conversation", conv.id, {"title": conv.title})
@@ -247,11 +271,28 @@ def create_conversation():
 @conversations_bp.route("/<string:conv_id>", methods=["GET"])
 @require_auth
 def get_conversation(conv_id: str):
+    from datetime import datetime, timezone
+    from sqlalchemy import or_ as sa_or_
     conv = Conversation.query.get(conv_id)
     if not conv or (conv.deleted_at and g.user_role != "admin"):
         return jsonify({"error": "Conversation not found"}), 404
-    if conv.user_id and conv.user_id != g.user_id and g.user_role != "admin":
-        return jsonify({"error": "Access denied"}), 403
+
+    is_owner = (conv.user_id == g.user_id) or (g.user_role == "admin") or (conv.user_id is None)
+
+    # Check shared access for non-owners
+    my_permission = None
+    if not is_owner:
+        from models.access import SessionAccess
+        now   = datetime.now(timezone.utc)
+        grant = (
+            SessionAccess.query
+            .filter_by(session_id=conv_id, grantee_id=g.user_id, revoked_at=None)
+            .filter(sa_or_(SessionAccess.expires_at.is_(None), SessionAccess.expires_at > now))
+            .first()
+        )
+        if not grant:
+            return jsonify({"error": "Access denied"}), 403
+        my_permission = grant.permission
 
     # Auto-claim orphaned session
     if conv.user_id is None:
@@ -261,7 +302,9 @@ def get_conversation(conv_id: str):
         except Exception:
             db.session.rollback()
 
-    return jsonify({"conversation": conv.to_dict_full()}), 200
+    data = conv.to_dict_full()
+    data["my_permission"] = my_permission   # None = owner, else 'read'|'comment'|'write'
+    return jsonify({"conversation": data}), 200
 
 
 # ── Finalise live session ─────────────────────────────────────────────────────
@@ -316,8 +359,11 @@ def complete_conversation(conv_id: str):
         conv.duration = int(duration) if duration else conv.duration
         if user_id and not conv.user_id:
             conv.user_id = user_id
+        uid = conv.user_id or user_id
         if not conv.template_version_id:
-            conv.template_version_id = get_active_template_version_id(conv.user_id or user_id)
+            conv.template_version_id = get_active_template_version_id(uid)
+        if not conv.patient_template_version_id:
+            conv.patient_template_version_id = get_active_template_version_id(uid, "patient_facing")
 
         db.session.commit()
 
@@ -455,6 +501,7 @@ def update_summary(conv_id: str):
     allowed = {
         "patient_name", "patient_age", "patient_gender",
         "disease", "education", "emotional_state", "additional_notes",
+        "patient_facing_summary",
     }
 
     try:
@@ -628,9 +675,11 @@ def recommend(conv_id: str):
 @require_auth
 def export_pdf(conv_id: str):
     """
-    Generate and stream a clinical note PDF for a completed session.
+    Generate and stream a PDF for a session.
 
-    Returns a PDF file download (application/pdf).
+    Query:
+      audience=clinical (default) — clinician-oriented note
+      audience=patient — patient-facing plain-language PDF (layout locked to patient template version)
     """
     from flask import make_response
     from services.pdf_service import generate_session_pdf
@@ -641,17 +690,22 @@ def export_pdf(conv_id: str):
     if conv.user_id and conv.user_id != g.user_id and g.user_role != "admin":
         return jsonify({"error": "Access denied"}), 403
 
+    audience = (request.args.get("audience") or "clinical").strip().lower()
+    if audience not in ("clinical", "patient"):
+        audience = "clinical"
+
     try:
-        pdf_bytes = generate_session_pdf(conv)
+        pdf_bytes = generate_session_pdf(conv, audience=audience)
         safe_title = (conv.title or "session").replace(" ", "_")[:40]
-        filename   = f"audient_{safe_title}_{conv.id[:8]}.pdf"
+        prefix = "patient_visit" if audience == "patient" else "clinical_note"
+        filename = f"audient_{prefix}_{safe_title}_{conv.id[:8]}.pdf"
 
         response = make_response(pdf_bytes)
         response.headers["Content-Type"]        = "application/pdf"
         response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
         response.headers["Content-Length"]      = len(pdf_bytes)
 
-        log_action("pdf_exported", "conversation", conv_id, {"title": conv.title})
+        log_action("pdf_exported", "conversation", conv_id, {"title": conv.title, "audience": audience})
         return response
     except Exception as e:
         print(f"[pdf] export error for {conv_id}: {e}")
@@ -690,6 +744,7 @@ def continue_session(conv_id: str):
             parent_id=conv_id,
             is_offline=False,
             template_version_id=get_active_template_version_id(g.user_id),
+            patient_template_version_id=get_active_template_version_id(g.user_id, "patient_facing"),
         )
         db.session.add(cont)
         db.session.commit()
