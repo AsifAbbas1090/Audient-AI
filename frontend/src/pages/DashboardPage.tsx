@@ -5,24 +5,28 @@ import {
   Search, Plus, Clock, Mic,
   FileText, TrendingUp, ChevronRight,
   CheckCircle2, Loader2, AlertCircle,
-  RefreshCw, Users, ShieldCheck,
+  RefreshCw, ShieldCheck, Sparkles, Tag,
 } from 'lucide-react'
 import { Sidebar }    from '../components/ui/Sidebar'
 import { Badge }      from '../components/ui/Badge'
 import { StatCard }   from '../components/visual/StatCard'
 import { SkeletonCard } from '../components/ui/Skeleton'
-import { getUser }    from '../hooks/useAuth'
+import { usePreferencesUser } from '../hooks/usePreferencesUser'
+import { getSpecialtyUi } from '../lib/specialtyUi'
 import { cn }         from '../utils/cn'
 import api            from '../lib/api'
 
 // ── Types ────────────────────────────────────────────────────
 interface Conv {
-  id:         string
-  title:      string | null
-  status:     'complete' | 'processing' | 'failed' | 'approved'
-  language:   string | null
-  duration:   number | null
-  created_at: string
+  id:           string
+  title:        string | null
+  status:       'complete' | 'processing' | 'failed' | 'approved'
+  language:     string | null
+  duration:     number | null
+  created_at:   string
+  patient_id?:  string | null
+  patient_code?: string | null
+  patient_name?: string | null
 }
 
 type StatusFilter = 'all' | 'complete' | 'processing' | 'failed' | 'approved'
@@ -70,18 +74,29 @@ function SessionCard({ conv, index }: { conv: Conv; index: number }) {
           'hover:bg-white/6 hover:border-brand-500/25 hover:shadow-glow',
           'transition-all duration-200',
         )}>
-          {/* Top row */}
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
               <h3 className="font-semibold text-white text-sm truncate group-hover:text-brand-300 transition-colors">
                 {conv.title || 'Untitled session'}
               </h3>
-              <p className="text-xs text-slate-500 mt-0.5">{timeAgo(conv.created_at)}</p>
+              <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                <p className="text-xs text-slate-500">{timeAgo(conv.created_at)}</p>
+                {conv.patient_code && (
+                  <Link
+                    to={`/patients/${conv.patient_id}`}
+                    onClick={e => e.stopPropagation()}
+                    className="inline-flex items-center gap-1 text-[10px] font-mono font-semibold text-brand-400 bg-brand-500/10 border border-brand-500/20 rounded-full px-2 py-0.5 hover:bg-brand-500/20 transition-colors"
+                    title={conv.patient_name ?? undefined}
+                  >
+                    <Tag size={9} />
+                    {conv.patient_code}
+                  </Link>
+                )}
+              </div>
             </div>
             <div className="shrink-0">{cfg.badge}</div>
           </div>
 
-          {/* Body */}
           <p className="text-sm text-slate-400 mt-3 leading-relaxed line-clamp-2 min-h-[40px]">
             {conv.status === 'failed'
               ? 'Transcription failed. Please re-record the session.'
@@ -90,7 +105,6 @@ function SessionCard({ conv, index }: { conv: Conv; index: number }) {
               : 'Session details available in the transcript view.'}
           </p>
 
-          {/* Footer */}
           <div className="flex items-center justify-between mt-4">
             <div className="flex items-center gap-3 text-xs text-slate-500">
               <span className="flex items-center gap-1">
@@ -116,7 +130,7 @@ function SessionCard({ conv, index }: { conv: Conv; index: number }) {
 }
 
 // ── Empty state ───────────────────────────────────────────────
-function EmptyState({ query }: { query: string }) {
+function EmptyState({ query, specialtyHint }: { query: string; specialtyHint: string }) {
   return (
     <motion.div
       initial={{ opacity: 0 }}
@@ -134,7 +148,7 @@ function EmptyState({ query }: { query: string }) {
       <p className="text-sm text-slate-500 max-w-xs">
         {query
           ? `No results for "${query}". Try a different keyword.`
-          : 'Start your first live session or use Record & Extract to begin.'}
+          : specialtyHint}
       </p>
       {!query && (
         <Link
@@ -148,9 +162,42 @@ function EmptyState({ query }: { query: string }) {
   )
 }
 
+// ── Specialty AI Focus Panel ──────────────────────────────────
+function SpecialtyFocusPanel({ specUi }: { specUi: ReturnType<typeof getSpecialtyUi> }) {
+  const { accent, label, focusAreas } = specUi
+  return (
+    <motion.div
+      key={label}
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3 }}
+      className={cn(
+        'rounded-2xl border p-5 mb-8',
+        accent.bg, accent.border,
+      )}
+    >
+      <div className="flex items-center gap-2 mb-3">
+        <Sparkles size={14} className={accent.text} />
+        <span className={cn('text-xs font-semibold uppercase tracking-wider', accent.text)}>
+          AI extraction focus — {label}
+        </span>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+        {focusAreas.map(area => (
+          <div key={area} className="flex items-start gap-2">
+            <CheckCircle2 size={12} className={cn('mt-0.5 shrink-0', accent.text)} />
+            <span className="text-xs text-slate-300 leading-relaxed">{area}</span>
+          </div>
+        ))}
+      </div>
+    </motion.div>
+  )
+}
+
 // ── Page ─────────────────────────────────────────────────────
 export default function DashboardPage() {
-  const user = getUser()
+  const user = usePreferencesUser()
+  const specUi = getSpecialtyUi(user?.specialty)
 
   const [convs,        setConvs]        = useState<Conv[]>([])
   const [loading,      setLoading]      = useState(true)
@@ -168,7 +215,6 @@ export default function DashboardPage() {
       .finally(() => setLoading(false))
   }, [refreshKey])
 
-  // ── Derived stats ────────────────────────────────────────
   const completed  = convs.filter(c => c.status === 'complete')
   const avgDur     = completed.length
     ? Math.round(completed.reduce((s, c) => s + (c.duration ?? 0), 0) / completed.length)
@@ -177,7 +223,6 @@ export default function DashboardPage() {
     Date.now() - new Date(c.created_at).getTime() < 7 * 86_400_000
   ).length
 
-  // ── Filtered list ────────────────────────────────────────
   const filtered = useMemo(() => {
     return convs.filter(c => {
       const matchStatus = statusFilter === 'all' || c.status === statusFilter
@@ -189,6 +234,15 @@ export default function DashboardPage() {
     })
   }, [convs, query, statusFilter])
 
+  // Specialty-specific stat label
+  const sessionLabel = {
+    cardiology:       'Cardiac Consultations',
+    psychiatry:       'Psychiatric Sessions',
+    paediatrics:      'Paediatric Visits',
+    general_practice: 'GP Consultations',
+    general_mbbs:     'Total Sessions',
+  }[specUi.code] ?? 'Total Sessions'
+
   return (
     <div className="min-h-screen flex bg-surface-400">
       <Sidebar />
@@ -198,15 +252,30 @@ export default function DashboardPage() {
 
           {/* ── Page header ──────────────────────────────── */}
           <div className="flex items-start justify-between mb-8">
-            <div>
-              <h1 className="font-display font-bold text-2xl text-white">
-                {user ? `Welcome, ${user.name.split(' ')[0]}` : 'Sessions'}
-              </h1>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2 gap-y-1">
+                <h1 className="font-display font-bold text-2xl text-white">
+                  {user ? `Welcome, ${user.name.split(' ')[0]}` : 'Sessions'}
+                </h1>
+                {user && (
+                  <span className={cn(
+                    'inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider border',
+                    specUi.accent.bg, specUi.accent.text, specUi.accent.border,
+                  )}>
+                    {specUi.label}
+                  </span>
+                )}
+              </div>
               <p className="text-sm text-slate-400 mt-1">
                 {loading
                   ? 'Loading your sessions…'
                   : `${completed.length} of ${convs.length} sessions completed`}
               </p>
+              {user && (
+                <p className="text-xs text-slate-500 mt-2 max-w-xl leading-relaxed">
+                  {specUi.tagline}
+                </p>
+              )}
             </div>
             <div className="flex items-center gap-2">
               <button
@@ -229,7 +298,7 @@ export default function DashboardPage() {
           {/* ── Stats row ────────────────────────────────── */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-8">
             <StatCard
-              label="Total Sessions"
+              label={sessionLabel}
               value={convs.length}
               icon={FileText}
               trend={thisWeek > 0 ? { value: `+${thisWeek} this week`, up: true } : undefined}
@@ -257,6 +326,9 @@ export default function DashboardPage() {
               iconColor="text-amber-400"
             />
           </div>
+
+          {/* ── Specialty AI focus panel ──────────────────── */}
+          {user && <SpecialtyFocusPanel specUi={specUi} />}
 
           {/* ── Error ────────────────────────────────────── */}
           <AnimatePresence>
@@ -322,7 +394,7 @@ export default function DashboardPage() {
             {loading
               ? Array.from({ length: 4 }).map((_, i) => <SkeletonCard key={i} />)
               : filtered.length === 0
-              ? <EmptyState query={query} />
+              ? <EmptyState query={query} specialtyHint={specUi.emptyHint} />
               : filtered.map((c, i) => (
                   <SessionCard key={c.id} conv={c} index={i} />
                 ))

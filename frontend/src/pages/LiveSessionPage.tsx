@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Square, Clock, Download, Trash2, CheckCircle2,
-  Mic, MicOff, Wifi, WifiOff, Loader2, AlertCircle,
+  Mic, Wifi, WifiOff, Loader2, AlertCircle,
   ChevronDown, Stethoscope, User, RefreshCw,
 } from 'lucide-react'
 import { Sidebar }       from '../components/ui/Sidebar'
@@ -12,9 +12,11 @@ import { Card }          from '../components/ui/Card'
 import { Waveform }      from '../components/visual/Waveform'
 import { RecordButton }  from '../components/visual/RecordButton'
 import { SpeakerBubble } from '../components/visual/SpeakerBubble'
-import { useVoiceCommands }  from '../hooks/useVoiceCommands'
+import { VocalPromptsIndicator } from '../components/VocalPromptsIndicator'
+import { useVocalPrompts } from '../hooks/useVocalPrompts'
+import { speak }         from '../lib/vocalAudio'
 import { useLiveSession, type Segment, type LiveFields } from '../hooks/useLiveSession'
-import { useToast }          from '../components/ui/Toaster'
+import { useToast }      from '../components/ui/Toaster'
 import api from '../lib/api'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -62,26 +64,14 @@ function ProcessingOverlay({ step }: { step: number }) {
 type AudioDevice = { deviceId: string; label: string }
 
 function DeviceSelect({
-  icon,
-  label,
-  devices,
-  value,
-  onChange,
-  placeholder,
+  icon, label, devices, value, onChange, placeholder,
 }: {
-  icon:        React.ReactNode
-  label:       string
-  devices:     AudioDevice[]
-  value:       string
-  onChange:    (id: string) => void
-  placeholder: string
+  icon: React.ReactNode; label: string; devices: AudioDevice[]
+  value: string; onChange: (id: string) => void; placeholder: string
 }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <label className="text-xs text-slate-400 flex items-center gap-1.5">
-        {icon}
-        {label}
-      </label>
+      <label className="text-xs text-slate-400 flex items-center gap-1.5">{icon}{label}</label>
       <div className="relative">
         <select
           value={value}
@@ -144,11 +134,8 @@ export default function LiveSessionPage() {
   const [searchParams] = useSearchParams()
   const toast          = useToast()
 
-  // Continuation mode: /live?continue=<newSessionId>&parent=<parentId>
-  // The new conversation was already created server-side by /continue.
-  // We start recording into it straight away.
-  const continueSessionId = searchParams.get('continue')  // pre-created conv id
-  const parentSessionId   = searchParams.get('parent')    // original session id
+  const continueSessionId = searchParams.get('continue')
+  const parentSessionId   = searchParams.get('parent')
 
   const [segments,     setSegments]     = useState<Segment[]>([])
   const [elapsed,      setElapsed]      = useState(0)
@@ -160,31 +147,23 @@ export default function LiveSessionPage() {
   const [parentTitle,  setParentTitle]  = useState<string | null>(null)
 
   // ── Device selection ────────────────────────────────────────────────────────
-  const [audioDevices,     setAudioDevices]     = useState<AudioDevice[]>([])
-  const [doctorDeviceId,   setDoctorDeviceId]   = useState('')
-  const [patientDeviceId,  setPatientDeviceId]  = useState('')
+  const [audioDevices,    setAudioDevices]    = useState<AudioDevice[]>([])
+  const [doctorDeviceId,  setDoctorDeviceId]  = useState('')
+  const [patientDeviceId, setPatientDeviceId] = useState('')
 
-  // Enumerate audio input devices on mount (requires permission prompt first)
   useEffect(() => {
     navigator.mediaDevices?.enumerateDevices()
-      .then(devs => {
-        const inputs = devs
-          .filter(d => d.kind === 'audioinput')
-          .map(d => ({ deviceId: d.deviceId, label: d.label }))
-        setAudioDevices(inputs)
-      })
-      .catch(() => { /* permissions not granted yet — populated after start */ })
+      .then(devs => setAudioDevices(
+        devs.filter(d => d.kind === 'audioinput').map(d => ({ deviceId: d.deviceId, label: d.label }))
+      ))
+      .catch(() => {})
   }, [])
 
-  // Re-enumerate after first mic permission is granted
   const refreshDevices = useCallback(() => {
     navigator.mediaDevices?.enumerateDevices()
-      .then(devs => {
-        const inputs = devs
-          .filter(d => d.kind === 'audioinput')
-          .map(d => ({ deviceId: d.deviceId, label: d.label }))
-        setAudioDevices(inputs)
-      })
+      .then(devs => setAudioDevices(
+        devs.filter(d => d.kind === 'audioinput').map(d => ({ deviceId: d.deviceId, label: d.label }))
+      ))
       .catch(() => {})
   }, [])
 
@@ -198,7 +177,6 @@ export default function LiveSessionPage() {
   useEffect(() => { elapsedRef.current = elapsed }, [elapsed])
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [segments])
 
-  // Load parent session title when in continuation mode
   useEffect(() => {
     if (!parentSessionId) return
     api.get<{ conversation: { title: string | null } }>(`/api/conversations/${parentSessionId}`)
@@ -247,7 +225,7 @@ export default function LiveSessionPage() {
     connected, sessionId, active, paused, recording,
     permissionError, liveFields,
     startSession, pauseSession, resumeSession, stopSession,
-    getBlob, chunks,
+    getBlob,
   } = session
 
   // ── Timer ──────────────────────────────────────────────────────────────────
@@ -260,12 +238,10 @@ export default function LiveSessionPage() {
     return () => { if (timerRef.current) clearInterval(timerRef.current) }
   }, [active, paused])
 
-  // Processing indicator while chunks in-flight
   useEffect(() => {
     if (active && !paused) setProcessing(true)
   }, [segments.length])  // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-save when session ends
   useEffect(() => {
     if (!active && !recording && segments.length > 0 && sessionId && !isSavingRef.current) {
       isSavingRef.current = true
@@ -329,7 +305,7 @@ export default function LiveSessionPage() {
           isSavingRef.current = false
           toast('Processing failed — transcript still visible above', 'error')
         }
-      } catch { /* transient error — keep polling */ }
+      } catch { /* transient — keep polling */ }
     }, POLL_MS)
   }
 
@@ -344,16 +320,14 @@ export default function LiveSessionPage() {
     setSegments([])
     setElapsed(0)
     setStatusMsg(null)
-    // In continuation mode pass the pre-created session ID so the hook
-    // skips the /api/session/start call and uses the existing conversation.
     await startSession(continueSessionId ?? undefined)
-    refreshDevices()   // labels appear after permission is granted
+    refreshDevices()
     toast(continueSessionId ? 'Follow-up session started' : 'Session started — recording', 'success')
   }, [startSession, continueSessionId, toast, refreshDevices])
 
-  const handlePause  = useCallback(() => { pauseSession();           toast('Recording paused', 'info') }, [pauseSession, toast])
+  const handlePause  = useCallback(() => { pauseSession();           toast('Recording paused',   'info') }, [pauseSession,  toast])
   const handleResume = useCallback(async () => { await resumeSession(); toast('Recording resumed', 'info') }, [resumeSession, toast])
-  const handleStop   = useCallback(() => { stopSession();             toast('Session ended — saving…', 'info') }, [stopSession, toast])
+  const handleStop   = useCallback(() => { stopSession();             toast('Session ended — saving…', 'info') }, [stopSession,   toast])
 
   const handleClear = useCallback(() => {
     setSegments([]); setStatusMsg(null); setElapsed(0); setSavedId(null); isSavingRef.current = false
@@ -365,21 +339,6 @@ export default function LiveSessionPage() {
     else               await handleResume()
   }, [active, paused, handleStart, handlePause, handleResume])
 
-  // ── Voice commands ───────────────────────────────────────────────────────────
-  const { listening, lastCommand, supported: voiceSupported, startListening, stopListening } =
-    useVoiceCommands({
-      onStart:  () => { if (!active) handleStart() },
-      onStop:   () => { if (active)  handleStop()  },
-      onPause:  () => { if (active && !paused) handlePause() },
-      onResume: () => { if (active && paused)  handleResume() },
-      onClear:  handleClear,
-    })
-
-  function toggleVoice() {
-    if (listening) { stopListening(); toast('Voice commands off', 'info') }
-    else           { startListening(); toast('Voice commands on — say "start", "stop", "pause", "resume", or "clear"', 'info') }
-  }
-
   const handleExport = () => {
     const text = segments.map(s => `[${s.speaker}] ${s.text}`).join('\n')
     const blob = new Blob([text], { type: 'text/plain' })
@@ -389,6 +348,29 @@ export default function LiveSessionPage() {
     URL.revokeObjectURL(url)
   }
 
+  // ── Vocal prompts — always-on "Audient" wake word ───────────────────────────
+  const handleGenerateSummary = useCallback(() => {
+    const entries = Object.entries(FIELD_LABELS)
+      .map(([key, label]) => ({ label, value: (liveFields as any)[key] as string | null | undefined }))
+      .filter(e => e.value && e.value !== 'null')
+
+    if (entries.length === 0) {
+      speak('No extraction data available yet. Session is still recording.')
+    } else {
+      const text = entries.map(e => `${e.label}: ${e.value}`).join('. ')
+      speak(`Current extraction. ${text}.`)
+    }
+  }, [liveFields])
+
+  const { phase: vocalPhase, supported: vocalSupported, lastCmd: vocalLastCmd } = useVocalPrompts({
+    sessionId:         sessionId,
+    onStart:           () => { if (!active) handleStart() },
+    onStop:            () => { if (active)  handleStop()  },
+    onPause:           () => { if (active && !paused) handlePause() },
+    onResume:          () => { if (active && paused)  handleResume() },
+    onGenerateSummary: handleGenerateSummary,
+  })
+
   // ── Derived state ────────────────────────────────────────────────────────────
   const recordState = saving
     ? 'processing'
@@ -396,8 +378,8 @@ export default function LiveSessionPage() {
     : active &&  paused ? 'paused'
     : 'idle'
 
-  const speakerSet = [...new Set(segments.map(s => s.speaker))]
-  const wordCount  = segments.reduce((n, s) => n + s.text.split(/\s+/).length, 0)
+  const speakerSet    = [...new Set(segments.map(s => s.speaker))]
+  const wordCount     = segments.reduce((n, s) => n + s.text.split(/\s+/).length, 0)
   const hasLiveFields = Object.values(liveFields).some(v => v && v !== 'null')
 
   // ── Render ───────────────────────────────────────────────────────────────────
@@ -405,6 +387,13 @@ export default function LiveSessionPage() {
     <div className="min-h-screen flex bg-surface-400">
       <Sidebar />
       {saving && <ProcessingOverlay step={progressStep} />}
+
+      {/* Always-on vocal prompts indicator (bottom-right dot) */}
+      <VocalPromptsIndicator
+        phase={vocalPhase}
+        lastCmd={vocalLastCmd}
+        supported={vocalSupported}
+      />
 
       <main className="flex-1 overflow-hidden flex flex-col">
 
@@ -433,7 +422,12 @@ export default function LiveSessionPage() {
             <h1 className="font-display font-bold text-lg text-white">
               {continueSessionId ? 'Follow-up Session' : 'Live Session'}
             </h1>
-            <p className="text-xs text-slate-500 mt-0.5">WebSocket · Any language → English · AI diarization</p>
+            <p className="text-xs text-slate-500 mt-0.5">
+              WebSocket · Any language → English · AI diarization
+              {vocalSupported && (
+                <span className="ml-2 text-brand-400/80">· Say "Audient [command]"</span>
+              )}
+            </p>
           </div>
 
           <div className="flex items-center gap-2 flex-wrap justify-end">
@@ -459,28 +453,26 @@ export default function LiveSessionPage() {
               {connected ? 'Live' : 'Connecting…'}
             </div>
 
-            {voiceSupported && (
-              <button
-                onClick={toggleVoice}
-                title={listening ? 'Voice commands ON — click to disable' : 'Enable voice commands'}
-                className={`flex items-center gap-1.5 text-xs rounded-xl px-3 py-1.5 border transition-all ${
-                  listening
-                    ? 'text-brand-300 bg-brand-500/15 border-brand-500/30 animate-pulse'
-                    : 'text-slate-500 bg-white/4 border-white/8 hover:text-slate-300'
-                }`}
-              >
-                {listening ? <Mic size={12} /> : <MicOff size={12} />}
-                {listening ? 'Voice ON' : 'Voice'}
-              </button>
+            {/* Vocal prompts state chip */}
+            {vocalSupported && (
+              <div className={`flex items-center gap-1.5 text-xs rounded-xl px-3 py-1.5 border transition-all ${
+                vocalPhase === 'listening'
+                  ? 'text-brand-300 bg-brand-500/15 border-brand-500/30 animate-pulse'
+                  : 'text-slate-500 bg-white/4 border-white/8'
+              }`}>
+                <Mic size={12} className={vocalPhase === 'listening' ? 'text-brand-400' : 'text-slate-600'} />
+                {vocalPhase === 'listening' ? 'Listening…' : 'Vocal on'}
+              </div>
             )}
           </div>
         </header>
 
-        {lastCommand && (
+        {/* Last vocal command toast strip */}
+        {vocalLastCmd && (
           <div className="shrink-0 flex justify-center py-2 pointer-events-none">
             <div className="flex items-center gap-2 bg-brand-500/20 border border-brand-500/30 text-brand-200 text-sm font-medium px-4 py-2 rounded-full shadow-lg">
               <Mic size={13} />
-              Command: <span className="font-bold capitalize">{lastCommand}</span>
+              Vocal: <span className="font-bold capitalize">{vocalLastCmd.replace('_', ' ')}</span>
             </div>
           </div>
         )}
@@ -504,7 +496,6 @@ export default function LiveSessionPage() {
                   </Button>
                 )}
 
-                {/* Device selectors — visible only before recording starts */}
                 {!active && !saving && (
                   <div className="w-full grid grid-cols-2 gap-3 pt-2 border-t border-white/6">
                     <DeviceSelect
@@ -609,7 +600,6 @@ export default function LiveSessionPage() {
           {/* ── Right sidebar ───────────────────────────────────────────── */}
           <div className="hidden lg:flex flex-col gap-4 w-64 shrink-0">
 
-            {/* Session info */}
             <Card variant="elevated" className="p-5 space-y-4">
               <h3 className="text-sm font-semibold text-white">Session Info</h3>
               <div className="space-y-3">
@@ -630,10 +620,39 @@ export default function LiveSessionPage() {
               </div>
             </Card>
 
-            {/* Live extraction preview — appears once AI returns first fields */}
             {hasLiveFields && <LiveFieldsPanel fields={liveFields} />}
 
-            {/* Tips */}
+            {/* Vocal prompts command reference */}
+            {vocalSupported && (
+              <Card variant="elevated" className="p-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <Mic size={13} className="text-brand-400" />
+                  <h3 className="text-xs font-semibold text-white uppercase tracking-wide">Vocal Prompts</h3>
+                  <span className={`ml-auto h-2 w-2 rounded-full ${
+                    vocalPhase === 'listening' ? 'bg-brand-400 animate-pulse' :
+                    vocalPhase === 'success'   ? 'bg-emerald-400' :
+                    vocalPhase === 'error'     ? 'bg-red-400' :
+                                                 'bg-slate-500/70'
+                  }`} />
+                </div>
+                <ul className="space-y-1.5 text-[11px] text-slate-500">
+                  <li className="text-slate-400 font-medium pb-1 border-b border-white/6">Say "Audient" then…</li>
+                  {[
+                    ['start',            'Begin recording'],
+                    ['stop',             'End & process'],
+                    ['pause',            'Pause recording'],
+                    ['resume',           'Resume recording'],
+                    ['generate summary', 'Read live fields'],
+                  ].map(([cmd, desc]) => (
+                    <li key={cmd} className="flex justify-between gap-2">
+                      <span className="font-mono text-brand-400/80">{cmd}</span>
+                      <span className="text-right">{desc}</span>
+                    </li>
+                  ))}
+                </ul>
+              </Card>
+            )}
+
             <Card variant="flat" className="p-4">
               <h3 className="text-xs font-semibold text-slate-400 mb-3 uppercase tracking-wide">Tips</h3>
               <ul className="space-y-2 text-xs text-slate-500">
@@ -642,11 +661,6 @@ export default function LiveSessionPage() {
                 <li>· Fields extracted live every 60 seconds</li>
                 <li>· Add patient mic for better separation</li>
                 <li>· Session auto-saves when you end</li>
-                {voiceSupported && (
-                  <li className="pt-1 border-t border-white/6 text-brand-400">
-                    · Say "start", "stop", "pause", "resume", or "clear"
-                  </li>
-                )}
               </ul>
             </Card>
           </div>
