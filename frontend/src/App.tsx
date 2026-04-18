@@ -13,7 +13,10 @@ import SessionDetailPage from './pages/SessionDetailPage'
 import SettingsPage      from './pages/SettingsPage'
 import AnalyticsPage     from './pages/AnalyticsPage'
 import AdminPage         from './pages/AdminPage'
-import TemplateBuilderPage from './pages/TemplateBuilderPage'
+import TemplateBuilderPage  from './pages/TemplateBuilderPage'
+import PatientThreadPage   from './pages/PatientThreadPage'
+import PatientsPage        from './pages/PatientsPage'
+import ConsultInboxPage    from './pages/ConsultInboxPage'
 
 export default function App() {
   return (
@@ -33,6 +36,9 @@ export default function App() {
           <Route path="/settings"    element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
           <Route path="/templates"   element={<ProtectedRoute><TemplateBuilderPage /></ProtectedRoute>} />
           <Route path="/analytics"   element={<ProtectedRoute><AnalyticsPage /></ProtectedRoute>} />
+          <Route path="/patients"     element={<ProtectedRoute><PatientsPage /></ProtectedRoute>} />
+          <Route path="/patients/:id" element={<ProtectedRoute><PatientThreadPage /></ProtectedRoute>} />
+          <Route path="/consults"     element={<ProtectedRoute><ConsultInboxPage /></ProtectedRoute>} />
 
           {/* Admin only */}
           <Route path="/admin" element={<AdminRoute><AdminPage /></AdminRoute>} />
