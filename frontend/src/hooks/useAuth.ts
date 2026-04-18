@@ -38,9 +38,17 @@ export async function register(
   name: string,
   email: string,
   password: string,
-  role: 'healthcare' | 'admin' = 'healthcare'
+  role: 'healthcare' | 'admin' = 'healthcare',
+  specialty?: string,
+  doctorTitle?: string,
+  clinicName?: string,
 ): Promise<AuthUser> {
-  const res = await api.post<AuthResponse>('/api/auth/register', { name, email, password, role })
+  const res = await api.post<AuthResponse>('/api/auth/register', {
+    name, email, password, role,
+    ...(specialty    ? { specialty }                : {}),
+    ...(doctorTitle  ? { doctor_title: doctorTitle } : {}),
+    ...(clinicName   ? { clinic_name: clinicName }   : {}),
+  })
   persist(res.data.token, res.data.user)
   return res.data.user
 }

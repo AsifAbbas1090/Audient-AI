@@ -55,10 +55,21 @@ const CHUNK_MS     = 5_000   // stop-restart cycle interval
 const DIARIZE_MS   = 15_000  // diarize interval
 const EXTRACT_MS   = 60_000  // incremental extraction interval
 
-// In dev (Vite proxy) '' routes through the proxy to :5000.
-// In production set VITE_API_URL to the backend origin.
-const API_BASE = (): string =>
-  (import.meta.env.VITE_API_URL as string | undefined) ?? window.location.origin
+// Socket.IO must hit the same origin as the SPA in dev (e.g. :3000) so Vite can
+// proxy /socket.io → Flask. Connecting straight to :5000 bypasses the proxy and
+// often breaks the WS handshake ("Invalid frame header") behind mixed setups.
+// In production, VITE_API_URL points at the real API host.
+function SOCKET_ORIGIN(): string {
+  if (import.meta.env.DEV && typeof window !== 'undefined') {
+    return window.location.origin
+  }
+  return (import.meta.env.VITE_API_URL as string | undefined) ?? (typeof window !== 'undefined' ? window.location.origin : '')
+}
+
+/** HTTP API base — empty string = same origin (Vite `/api` proxy in dev). */
+function API_ROOT(): string {
+  return (import.meta.env.VITE_API_URL as string | undefined) ?? ''
+}
 
 // Module-level segment ID counter (never resets mid-tab)
 let _idCounter = 0
@@ -103,9 +114,10 @@ export function useLiveSession(opts: {
     if (socketRef.current?.connected) return
 
     const token  = localStorage.getItem('jwt_token')
-    const socket = io(API_BASE(), {
+    const socket = io(SOCKET_ORIGIN(), {
       auth:                 { token },
-      transports:           ['websocket', 'polling'],
+      // Prefer polling first so dev proxies reliably upgrade; then websocket.
+      transports:           ['polling', 'websocket'],
       reconnection:         true,
       reconnectionAttempts: 5,
       reconnectionDelay:    1_000,
@@ -202,7 +214,7 @@ export function useLiveSession(opts: {
       const token   = localStorage.getItem('jwt_token')
       const headers: Record<string, string> = { 'Content-Type': 'application/json' }
       if (token) headers['Authorization'] = `Bearer ${token}`
-      const res = await fetch(`${API_BASE()}/api/extract`, {
+      const res = await fetch(`${API_ROOT()}/api/extract`, {
         method: 'POST',
         headers,
         body:   JSON.stringify({ text }),
@@ -280,7 +292,7 @@ export function useLiveSession(opts: {
         const token   = localStorage.getItem('jwt_token')
         const headers: Record<string, string> = { 'Content-Type': 'application/json' }
         if (token) headers['Authorization'] = `Bearer ${token}`
-        const res  = await fetch(`${API_BASE()}/api/session/start`, { method: 'POST', headers })
+        const res  = await fetch(`${API_ROOT()}/api/session/start`, { method: 'POST', headers })
         const json = await res.json() as { session_id?: string }
         id = json.session_id ?? null
       } catch { /* session ID is optional — transcription works without it */ }

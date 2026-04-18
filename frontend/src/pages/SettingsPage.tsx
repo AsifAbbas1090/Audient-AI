@@ -12,6 +12,7 @@ import { Badge }      from '../components/ui/Badge'
 import { useTheme }   from '../components/providers/ThemeProvider'
 import { getUser }    from '../hooks/useAuth'
 import { useToast }   from '../components/ui/Toaster'
+import { USER_PROFILE_UPDATED } from '../hooks/usePreferencesUser'
 import api from '../lib/api'
 
 const SPECIALTY_OPTIONS = [
@@ -80,6 +81,7 @@ export default function SettingsPage() {
         setLicenseNumber(updated.license_number ?? '')
         setSignatureUrl(updated.signature_url ?? '')
         setLogoUrl(updated.logo_url ?? '')
+        window.dispatchEvent(new Event(USER_PROFILE_UPDATED))
       }
       setSaved(true)
       toast('Settings saved', 'success')
@@ -174,6 +176,11 @@ export default function SettingsPage() {
                   </option>
                 ))}
               </select>
+              <p className="text-[11px] text-slate-500 mt-2 leading-relaxed">
+                This drives how the AI prioritizes extraction, follow-up questions, and patient-facing wording. New template
+                defaults match your specialty; existing templates stay as you edited them until you change them in the
+                builder.
+              </p>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -201,28 +208,42 @@ export default function SettingsPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-medium text-slate-400 mb-2">Signature (png/jpg/webp, max 2MB)</label>
+                {signatureUrl && (
+                  <img
+                    src={signatureUrl}
+                    alt="Signature preview"
+                    className="mb-2 max-h-16 rounded border border-white/10 bg-white/5 object-contain p-1"
+                  />
+                )}
                 <input
                   type="file"
                   accept=".png,.jpg,.jpeg,.webp"
                   onChange={e => uploadAsset('signature', e.target.files?.[0] ?? null)}
                   className="block w-full text-xs text-slate-400 file:mr-3 file:rounded-lg file:border-0 file:bg-brand-500/20 file:px-3 file:py-2 file:text-slate-100"
                 />
-                <p className="text-[11px] text-slate-600 mt-1 break-all">
-                  {signatureUrl ? `Saved: ${signatureUrl}` : 'No signature uploaded yet.'}
-                </p>
+                {!signatureUrl && (
+                  <p className="text-[11px] text-slate-600 mt-1">No signature uploaded yet.</p>
+                )}
               </div>
 
               <div>
                 <label className="block text-xs font-medium text-slate-400 mb-2">Clinic logo (png/jpg/webp, max 2MB)</label>
+                {logoUrl && (
+                  <img
+                    src={logoUrl}
+                    alt="Clinic logo preview"
+                    className="mb-2 max-h-16 rounded border border-white/10 bg-white/5 object-contain p-1"
+                  />
+                )}
                 <input
                   type="file"
                   accept=".png,.jpg,.jpeg,.webp"
                   onChange={e => uploadAsset('logo', e.target.files?.[0] ?? null)}
                   className="block w-full text-xs text-slate-400 file:mr-3 file:rounded-lg file:border-0 file:bg-brand-500/20 file:px-3 file:py-2 file:text-slate-100"
                 />
-                <p className="text-[11px] text-slate-600 mt-1 break-all">
-                  {logoUrl ? `Saved: ${logoUrl}` : 'No logo uploaded yet.'}
-                </p>
+                {!logoUrl && (
+                  <p className="text-[11px] text-slate-600 mt-1">No logo uploaded yet.</p>
+                )}
               </div>
             </div>
             {uploadingAsset && (
