@@ -31,7 +31,8 @@ MIGRATIONS = [
     """
     CREATE TABLE IF NOT EXISTS doctor_templates (
       id VARCHAR(36) PRIMARY KEY,
-      user_id VARCHAR(36) NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+      user_id VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      purpose VARCHAR(32) NOT NULL DEFAULT 'clinical',
       name VARCHAR(255) NOT NULL DEFAULT 'My Clinical Template',
       specialty_base VARCHAR(50) NOT NULL DEFAULT 'general_mbbs',
       schema_json JSON NOT NULL,
@@ -77,6 +78,41 @@ MIGRATIONS = [
     ALTER TABLE conversations
       ADD COLUMN IF NOT EXISTS template_version_id VARCHAR(36)
       REFERENCES doctor_template_versions(id) ON DELETE SET NULL;
+    """,
+    """
+    ALTER TABLE conversations
+      ADD COLUMN IF NOT EXISTS patient_template_version_id VARCHAR(36)
+      REFERENCES doctor_template_versions(id) ON DELETE SET NULL;
+    """,
+    # ── doctor_templates: purpose + one row per (user, purpose) ──────────────
+    # Legacy installs had UNIQUE(user_id) only; replace with (user_id, purpose).
+    """
+    ALTER TABLE doctor_templates
+      ADD COLUMN IF NOT EXISTS purpose VARCHAR(32);
+    """,
+    """
+    UPDATE doctor_templates SET purpose = 'clinical' WHERE purpose IS NULL;
+    """,
+    """
+    ALTER TABLE doctor_templates
+      ALTER COLUMN purpose SET DEFAULT 'clinical';
+    """,
+    """
+    ALTER TABLE doctor_templates
+      ALTER COLUMN purpose SET NOT NULL;
+    """,
+    """
+    ALTER TABLE doctor_templates
+      DROP CONSTRAINT IF EXISTS doctor_templates_user_id_key;
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_doctor_templates_user_purpose
+      ON doctor_templates (user_id, purpose);
+    """,
+    # ── summaries: patient-facing plain-language text ───────────────────────
+    """
+    ALTER TABLE summaries
+      ADD COLUMN IF NOT EXISTS patient_facing_summary TEXT;
     """,
     # ── audio_files ────────────────────────────────────────────────────────
     # Entire table may not exist — db.create_all() handles that below,
@@ -132,8 +168,106 @@ MIGRATIONS = [
     ALTER TABLE users
       ADD COLUMN IF NOT EXISTS logo_url TEXT;
     """,
+    # ── session_access (Phase 2) ──────────────────────────────────────────────
+    """
+    CREATE TABLE IF NOT EXISTS session_access (
+      id            VARCHAR(36) PRIMARY KEY,
+      session_id    VARCHAR(36) NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      granted_by_id VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      grantee_id    VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      permission    VARCHAR(10) NOT NULL DEFAULT 'read',
+      expires_at    TIMESTAMPTZ,
+      revoked_at    TIMESTAMPTZ,
+      created_at    TIMESTAMPTZ DEFAULT NOW()
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_session_access_session ON session_access (session_id);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_session_access_grantee ON session_access (grantee_id);
+    """,
+    # ── session_comments (Phase 2) ────────────────────────────────────────────
+    """
+    CREATE TABLE IF NOT EXISTS session_comments (
+      id         VARCHAR(36) PRIMARY KEY,
+      session_id VARCHAR(36) NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      author_id  VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      body       TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_session_comments_session ON session_comments (session_id);
+    """,
+    # ── consult_requests (Phase 3) ────────────────────────────────────────────
+    """
+    CREATE TABLE IF NOT EXISTS consult_requests (
+      id                VARCHAR(36) PRIMARY KEY,
+      session_id        VARCHAR(36) NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      patient_thread_id VARCHAR(36) REFERENCES patients(id) ON DELETE SET NULL,
+      requester_id      VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      reviewer_id       VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      mode              VARCHAR(20) NOT NULL,
+      access_id         VARCHAR(36) REFERENCES session_access(id) ON DELETE SET NULL,
+      status            VARCHAR(20) NOT NULL DEFAULT 'pending',
+      briefing_json     JSON,
+      requester_note    TEXT,
+      created_at        TIMESTAMPTZ DEFAULT NOW(),
+      responded_at      TIMESTAMPTZ,
+      expires_at        TIMESTAMPTZ NOT NULL
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_consult_requests_reviewer ON consult_requests (reviewer_id);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_consult_requests_session ON consult_requests (session_id);
+    """,
+    # ── notifications (Phase 4) ───────────────────────────────────────────────
+    """
+    CREATE TABLE IF NOT EXISTS notifications (
+      id            VARCHAR(36) PRIMARY KEY,
+      user_id       VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      type          VARCHAR(50) NOT NULL,
+      payload_json  JSON,
+      read_at       TIMESTAMPTZ,
+      created_at    TIMESTAMPTZ DEFAULT NOW()
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_notifications_user_created ON notifications (user_id, created_at DESC);
+    """,
+    # ── consult_requests: reviewer response note ───────────────────────────────
+    """
+    ALTER TABLE consult_requests
+      ADD COLUMN IF NOT EXISTS respond_note TEXT;
+    """,
+    # ── patients: add patient_code (PAT-XXXX) ─────────────────────────────────
+    """
+    ALTER TABLE patients
+      ADD COLUMN IF NOT EXISTS patient_code VARCHAR(12);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_patients_patient_code ON patients (patient_code);
+    """,
     # ── audit_logs / patients — entire tables may be new ──────────────────
     # db.create_all() handles creation below.
+    # ── vocal_command_logs — timestamped audit of every wake-word event ──────────
+    """
+    CREATE TABLE IF NOT EXISTS vocal_command_logs (
+      id              VARCHAR(36) PRIMARY KEY,
+      session_id      VARCHAR(36) NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      phrase_heard    TEXT,
+      confidence      FLOAT,
+      command_matched VARCHAR(32),
+      action_taken    BOOLEAN NOT NULL DEFAULT true,
+      triggered_at    TIMESTAMPTZ DEFAULT NOW()
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_vocal_command_logs_session ON vocal_command_logs (session_id);
+    """,
 ]
 
 
