@@ -1,5 +1,8 @@
 """
 Doctor template models with immutable version history.
+
+Each user may have one template row per *purpose* (e.g. clinical vs patient-facing PDF),
+each with its own version history.
 """
 import uuid
 from datetime import datetime, timezone
@@ -16,15 +19,20 @@ def _now():
 
 class DoctorTemplate(db.Model):
     __tablename__ = "doctor_templates"
+    __table_args__ = (
+        db.UniqueConstraint("user_id", "purpose", name="uq_doctor_templates_user_purpose"),
+    )
 
     id = db.Column(db.String(36), primary_key=True, default=_uuid)
     user_id = db.Column(
         db.String(36),
         db.ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
-        unique=True,
         index=True,
     )
+    purpose = db.Column(db.String(32), nullable=False, default="clinical")
+    # purpose: clinical | patient_facing
+
     name = db.Column(db.String(255), nullable=False, default="My Clinical Template")
     specialty_base = db.Column(db.String(50), nullable=False, default="general_mbbs")
     schema_json = db.Column(db.JSON, nullable=False)
@@ -36,7 +44,7 @@ class DoctorTemplate(db.Model):
     created_at = db.Column(db.DateTime(timezone=True), default=_now)
     updated_at = db.Column(db.DateTime(timezone=True), default=_now, onupdate=_now)
 
-    user = db.relationship("User", backref=db.backref("doctor_template", uselist=False))
+    user = db.relationship("User", backref=db.backref("doctor_templates", lazy="dynamic"))
     versions = db.relationship(
         "DoctorTemplateVersion",
         backref="template",
@@ -54,6 +62,7 @@ class DoctorTemplate(db.Model):
         return {
             "id": self.id,
             "user_id": self.user_id,
+            "purpose": self.purpose,
             "name": self.name,
             "specialty_base": self.specialty_base,
             "schema_json": self.schema_json,
