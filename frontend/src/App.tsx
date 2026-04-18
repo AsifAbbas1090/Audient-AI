@@ -8,7 +8,6 @@ import LoginPage         from './pages/LoginPage'
 import SignupPage        from './pages/SignupPage'
 import DashboardPage     from './pages/DashboardPage'
 import LiveSessionPage   from './pages/LiveSessionPage'
-import ASRPage           from './pages/ASRPage'
 import SessionDetailPage from './pages/SessionDetailPage'
 import SettingsPage      from './pages/SettingsPage'
 import AnalyticsPage     from './pages/AnalyticsPage'
@@ -31,7 +30,6 @@ export default function App() {
           {/* Healthcare + Admin */}
           <Route path="/app"         element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
           <Route path="/live"        element={<ProtectedRoute><LiveSessionPage /></ProtectedRoute>} />
-          <Route path="/asr"         element={<ProtectedRoute><ASRPage /></ProtectedRoute>} />
           <Route path="/session/:id" element={<ProtectedRoute><SessionDetailPage /></ProtectedRoute>} />
           <Route path="/settings"    element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
           <Route path="/templates"   element={<ProtectedRoute><TemplateBuilderPage /></ProtectedRoute>} />

@@ -1,36 +1,30 @@
 /**
- * useVocalPrompts — always-on wake-word + command recognition for hands-free
- * session control.
+ * useVocalPrompts — wake-word voice control for hands-free session management.
+ *
+ * Architecture: fresh SpeechRecognition instance per utterance cycle.
+ * Chrome's Web Speech API accumulates internal state and silently stops
+ * delivering results when a long-lived instance shares the mic with a
+ * MediaRecorder.  Creating a new instance after each onend avoids this.
  *
  * Two-phase model:
- *  1. "watching"  — silent; Web Speech API runs continuously listening for
- *                   the word "Audient".  Nothing is stored or sent anywhere.
- *  2. "listening" — 2.5 s command window opened after wake word detected.
- *                   Fuzzy-matches the next utterance against known commands.
- *
- * Audio feedback:
- *  · Wake word detected  → ascending three-note chime
- *  · Command matched     → double-beep + voice confirmation
- *  · No match / timeout  → low error beep
- *
- * Every vocal event (hit or miss) is logged to the backend so the session
- * record has a timestamped audit trail of exactly what the doctor said.
+ *  watching  → listening for "Audient [command]"
+ *  listening → 4 s window to speak a command after the wake word fires
  */
 import { useEffect, useRef, useState } from 'react'
-import { playChime, playErrorBeep, playSuccessBeep, speak } from '../lib/vocalAudio'
+import { playChime, playErrorBeep, playSuccessBeep, speak, primeAudio } from '../lib/vocalAudio'
 import api from '../lib/api'
 
-// ── Types ───────────────────────────────────────────────────────────────────
+// ── Types ─────────────────────────────────────────────────────────────────────
 export type VocalCommand = 'start' | 'stop' | 'pause' | 'resume' | 'generate_summary'
 export type VocalPhase   = 'off' | 'watching' | 'listening' | 'success' | 'error'
 
 export interface UseVocalPromptsOptions {
-  sessionId?:          string | null
-  onStart:             () => void
-  onStop:              () => void
-  onPause:             () => void
-  onResume:            () => void
-  onGenerateSummary:   () => void
+  sessionId?:        string | null
+  onStart:           () => void
+  onStop:            () => void
+  onPause:           () => void
+  onResume:          () => void
+  onGenerateSummary: () => void
 }
 
 export interface UseVocalPromptsResult {
@@ -40,35 +34,36 @@ export interface UseVocalPromptsResult {
   lastCmd:   VocalCommand | null
 }
 
-// ── Command table ────────────────────────────────────────────────────────────
-const COMMAND_WINDOW_MS    = 2500
-const CONFIDENCE_THRESHOLD = 0.52   // minimum fuzzy score to accept a command
+// ── Constants ──────────────────────────────────────────────────────────────────
+const COMMAND_WINDOW_MS = 4000
 
-const COMMAND_ALIASES: Record<VocalCommand, string[]> = {
-  start:            ['start', 'start recording', 'begin', 'begin recording'],
-  stop:             ['stop', 'stop recording', 'end', 'end recording', 'finish', 'done', 'end session'],
-  pause:            ['pause', 'pause recording', 'hold', 'hold on'],
-  resume:           ['resume', 'resume recording', 'continue', 'go on'],
-  generate_summary: ['generate summary', 'summary', 'generate', 'get summary', 'summarise', 'summarize'],
-}
+// ── Command table ──────────────────────────────────────────────────────────────
+const COMMANDS: { cmd: VocalCommand; triggers: string[] }[] = [
+  { cmd: 'start',            triggers: ['start', 'begin', 'record', 'go']                                },
+  { cmd: 'stop',             triggers: ['stop', 'end', 'finish', 'done', 'complete']                      },
+  { cmd: 'pause',            triggers: ['pause', 'hold', 'wait']                                          },
+  { cmd: 'resume',           triggers: ['resume', 'continue', 'unpause', 'go on']                         },
+  { cmd: 'generate_summary', triggers: ['summary', 'summarise', 'summarize', 'generate', 'report']        },
+]
 
 const VOICE_CONFIRMATIONS: Record<VocalCommand, string> = {
   start:            'Recording started.',
-  stop:             'Recording stopped. Processing your session.',
-  pause:            'Recording paused.',
-  resume:           'Recording resumed.',
-  generate_summary: 'Generating your summary now.',
+  stop:             'Session ended. Processing now.',
+  pause:            'Paused.',
+  resume:           'Resumed.',
+  generate_summary: 'Generating summary.',
 }
 
-// ── Levenshtein fuzzy matching ───────────────────────────────────────────────
+// Wake word variants — common speech-engine mishearings of "Audient"
+const WAKE_VARIANTS = ['audient', 'audience', 'evident', 'obvious', 'audio', 'audient ai', 'audience ai']
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
 function levenshtein(a: string, b: string): number {
   const dp: number[] = Array.from({ length: b.length + 1 }, (_, i) => i)
   for (let i = 1; i <= a.length; i++) {
     let prev = i
     for (let j = 1; j <= b.length; j++) {
-      const val = a[i - 1] === b[j - 1]
-        ? dp[j - 1]
-        : 1 + Math.min(dp[j - 1], dp[j], prev)
+      const val = a[i - 1] === b[j - 1] ? dp[j - 1] : 1 + Math.min(dp[j - 1], dp[j], prev)
       dp[j - 1] = prev
       prev = val
     }
@@ -77,187 +72,268 @@ function levenshtein(a: string, b: string): number {
   return dp[b.length]
 }
 
-function matchCommand(transcript: string): { cmd: VocalCommand; score: number } | null {
-  const heard = transcript.toLowerCase().trim()
-  let best: { cmd: VocalCommand; score: number } | null = null
+function hasWakeWord(text: string): boolean {
+  const t = text.toLowerCase()
+  for (const v of WAKE_VARIANTS) if (t.includes(v)) return true
+  // Fuzzy: any single word within edit-distance 2 of "audient"
+  for (const w of t.split(/\s+/)) if (levenshtein(w, 'audient') <= 2) return true
+  return false
+}
 
-  for (const [cmd, aliases] of Object.entries(COMMAND_ALIASES) as [VocalCommand, string[]][]) {
-    for (const alias of aliases) {
-      if (heard.includes(alias)) return { cmd: cmd as VocalCommand, score: 1.0 }
-      const dist  = levenshtein(heard, alias)
-      const score = 1 - dist / Math.max(heard.length, alias.length, 1)
-      if (!best || score > best.score) best = { cmd: cmd as VocalCommand, score }
+function stripWakeWord(text: string): string {
+  let s = text.toLowerCase()
+  for (const v of WAKE_VARIANTS) s = s.replace(v, '')
+  // Remove stray "ai" left after stripping "audient ai"
+  s = s.replace(/\bai\b/, '').replace(/[.,!?]+/g, ' ').trim()
+  // Fuzzy-strip leading word that resembles "audient"
+  const words = s.split(/\s+/)
+  if (words[0] && levenshtein(words[0], 'audient') <= 2) words.shift()
+  return words.join(' ').trim()
+}
+
+function matchCommand(text: string): VocalCommand | null {
+  const t = text.toLowerCase()
+  for (const { cmd, triggers } of COMMANDS) {
+    for (const tr of triggers) {
+      if (t.includes(tr)) return cmd
     }
   }
-  return best && best.score >= CONFIDENCE_THRESHOLD ? best : null
+  // Fuzzy single-word fallback
+  for (const w of t.split(/\s+/)) {
+    for (const { cmd, triggers } of COMMANDS) {
+      for (const tr of triggers) {
+        if (tr.split(' ').length === 1 && levenshtein(w, tr) <= 1) return cmd
+      }
+    }
+  }
+  return null
 }
 
-function hasWakeWord(text: string): boolean {
-  const normalized = text.toLowerCase().trim()
-  if (/\baudient\b/.test(normalized)) return true
-  const firstWord = normalized.split(/\s+/)[0] ?? ''
-  return levenshtein(firstWord, 'audient') <= 2
-}
-
-// ── Web Speech API shim types ────────────────────────────────────────────────
-interface SpeechResult      { transcript: string; confidence: number }
-interface SpeechResultItem  { readonly [i: number]: SpeechResult; readonly length: number }
-interface SpeechResultList  { readonly [i: number]: SpeechResultItem; readonly length: number }
-interface SpeechEvent       { readonly resultIndex: number; readonly results: SpeechResultList }
-interface SpeechErrorEvent  { readonly error: string }
-interface SpeechRecognition {
+// ── Web Speech API shim ────────────────────────────────────────────────────────
+interface SpeechAlt  { transcript: string; confidence: number }
+interface SpeechItem { readonly length: number; readonly isFinal: boolean; readonly [i: number]: SpeechAlt }
+interface SpeechList { readonly length: number; readonly [i: number]: SpeechItem }
+interface SpeechEvt  { readonly resultIndex: number; readonly results: SpeechList }
+interface SpeechErrEvt { readonly error: string }
+interface SR {
   lang: string; continuous: boolean; interimResults: boolean; maxAlternatives: number
-  onresult: ((e: SpeechEvent) => void) | null
+  onresult: ((e: SpeechEvt) => void) | null
   onend:    (() => void) | null
-  onerror:  ((e: SpeechErrorEvent) => void) | null
+  onerror:  ((e: SpeechErrEvt) => void) | null
   start(): void; stop(): void
 }
-
-const SpeechAPI: (new () => SpeechRecognition) | null =
+const SpeechAPI: (new () => SR) | null =
   typeof window !== 'undefined'
-    ? ((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition || null)
+    ? ((window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition ?? null)
     : null
 
-// ── Hook ─────────────────────────────────────────────────────────────────────
+const L = {
+  info:  (...a: unknown[]) => console.log( '%c[Vocal]', 'color:#818cf8;font-weight:bold', ...a),
+  warn:  (...a: unknown[]) => console.warn('%c[Vocal]', 'color:#f59e0b;font-weight:bold', ...a),
+  error: (...a: unknown[]) => console.error('%c[Vocal]','color:#f87171;font-weight:bold', ...a),
+}
+
+// ── Hook ──────────────────────────────────────────────────────────────────────
 export function useVocalPrompts(opts: UseVocalPromptsOptions): UseVocalPromptsResult {
   const supported = Boolean(SpeechAPI)
+  L.info('SpeechRecognition supported:', supported)
 
   const [phase,     setPhase]     = useState<VocalPhase>(supported ? 'watching' : 'off')
   const [lastHeard, setLastHeard] = useState<string | null>(null)
   const [lastCmd,   setLastCmd]   = useState<VocalCommand | null>(null)
 
-  // Stable mutable refs so the rec.onresult closure is never stale
-  const phaseRef    = useRef<VocalPhase>(supported ? 'watching' : 'off')
-  const optsRef     = useRef(opts)
-  optsRef.current   = opts   // updated every render — always fresh callbacks
-  const cmdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const recRef      = useRef<SpeechRecognition | null>(null)
-  const mountedRef  = useRef(true)
+  const phaseRef     = useRef<VocalPhase>(supported ? 'watching' : 'off')
+  const optsRef      = useRef(opts)
+  optsRef.current    = opts
+  const cmdTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const stopRef      = useRef(false)
+  const activeRecRef = useRef<SR | null>(null)  // only the current instance may restart
 
-  // Thread-safe phase setter (updates both ref and React state)
   function setP(p: VocalPhase) {
     phaseRef.current = p
-    if (mountedRef.current) setPhase(p)
+    setPhase(p)
   }
 
-  // ── Handler ref pattern — updated every render, called by stable onresult ─
-  const handlerRef = useRef<(t: string, c: number) => void>(() => {})
-
-  // Rebuild the handler after every render so it always closes over fresh state
-  useEffect(() => {
-    handlerRef.current = (transcript: string, confidence: number) => {
-      const text = transcript.toLowerCase().trim()
-
-      if (phaseRef.current === 'watching') {
-        if (!hasWakeWord(text)) return
-        playChime()
-
-        // Try same-breath command: "Audient start"
-        const afterWake = text.replace(/\baudient[.,!]?\s*/i, '').trim()
-        if (afterWake) {
-          const match = matchCommand(afterWake)
-          if (match) { dispatchCommand(match.cmd, afterWake, match.score); return }
-        }
-        // Open 2.5 s command window
-        setP('listening')
-        cmdTimerRef.current = setTimeout(() => {
-          if (phaseRef.current === 'listening') {
-            playErrorBeep()
-            setP('watching')
-          }
-        }, COMMAND_WINDOW_MS)
-
-      } else if (phaseRef.current === 'listening') {
-        const match = matchCommand(text)
-        if (match) {
-          dispatchCommand(match.cmd, text, match.score)
-        } else if (text.length > 2) {
-          if (cmdTimerRef.current) { clearTimeout(cmdTimerRef.current); cmdTimerRef.current = null }
-          playErrorBeep()
-          setP('error')
-          logCommand(text, confidence, null, false)
-          setTimeout(() => { if (phaseRef.current === 'error') setP('watching') }, 1000)
-        }
-      }
-    }
-  })
-
-  function dispatchCommand(cmd: VocalCommand, heard: string, score: number) {
-    if (cmdTimerRef.current) { clearTimeout(cmdTimerRef.current); cmdTimerRef.current = null }
-    setP('success')
-    if (mountedRef.current) { setLastCmd(cmd); setLastHeard(heard) }
-    playSuccessBeep()
-    speak(VOICE_CONFIRMATIONS[cmd])
-
-    const o = optsRef.current
-    switch (cmd) {
-      case 'start':            o.onStart();           break
-      case 'stop':             o.onStop();            break
-      case 'pause':            o.onPause();           break
-      case 'resume':           o.onResume();          break
-      case 'generate_summary': o.onGenerateSummary(); break
-    }
-
-    logCommand(heard, score, cmd, true)
-    setTimeout(() => {
-      setP('watching')
-      if (mountedRef.current) { setLastCmd(null); setLastHeard(null) }
-    }, 1500)
-  }
-
-  function logCommand(
-    phrase: string, confidence: number,
-    cmd: VocalCommand | null, actionTaken: boolean
-  ) {
+  function log(phrase: string, confidence: number, cmd: VocalCommand | null, acted: boolean) {
     const sid = optsRef.current.sessionId
     if (!sid) return
     api.post(`/api/sessions/${sid}/vocal-commands`, {
-      phrase_heard:    phrase,
-      confidence,
-      command_matched: cmd,
-      action_taken:    actionTaken,
+      phrase_heard: phrase, confidence, command_matched: cmd, action_taken: acted,
     }).catch(() => {})
   }
 
-  // ── Speech recognition lifecycle (mounts once) ───────────────────────────
+  function dispatch(cmd: VocalCommand, heard: string, score: number) {
+    if (cmdTimerRef.current) { clearTimeout(cmdTimerRef.current); cmdTimerRef.current = null }
+    setP('success')
+    setLastCmd(cmd)
+    setLastHeard(heard)
+    primeAudio()
+    playSuccessBeep()
+    speak(VOICE_CONFIRMATIONS[cmd])
+    const o = optsRef.current
+    if (cmd === 'start')            o.onStart()
+    if (cmd === 'stop')             o.onStop()
+    if (cmd === 'pause')            o.onPause()
+    if (cmd === 'resume')           o.onResume()
+    if (cmd === 'generate_summary') o.onGenerateSummary()
+    log(heard, score, cmd, true)
+    setTimeout(() => { setP('watching'); setLastCmd(null); setLastHeard(null) }, 1800)
+  }
+
+  function handleTranscript(transcript: string, confidence: number) {
+    const text = transcript.toLowerCase().trim()
+    if (!text) return
+    setLastHeard(transcript)
+
+    L.info(`heard [${phaseRef.current}] "${transcript}" (conf=${confidence.toFixed(2)})`)
+
+    if (phaseRef.current === 'watching') {
+      const woke = hasWakeWord(text)
+      L.info('wake-word check:', woke, '| variants checked against:', text)
+      if (!woke) return
+
+      primeAudio()
+      playChime()
+      const afterWake = stripWakeWord(text)
+      L.info('after strip:', `"${afterWake}"`)
+
+      if (afterWake) {
+        const cmd = matchCommand(afterWake)
+        L.info('same-breath command match:', cmd)
+        if (cmd) { dispatch(cmd, afterWake, 1.0); return }
+      }
+
+      L.info('opening command window for', COMMAND_WINDOW_MS, 'ms')
+      setP('listening')
+      cmdTimerRef.current = setTimeout(() => {
+        if (phaseRef.current === 'listening') {
+          L.warn('command window timed out — no command heard')
+          playErrorBeep()
+          setP('watching')
+        }
+      }, COMMAND_WINDOW_MS)
+
+    } else if (phaseRef.current === 'listening') {
+      const cmd = matchCommand(text)
+      L.info('command match attempt:', `"${text}"`, '→', cmd)
+      if (cmd) {
+        dispatch(cmd, text, 1.0)
+      } else {
+        L.warn('no command matched for:', `"${text}"`)
+      }
+    }
+  }
+
+  // ── Fresh-instance cycle ────────────────────────────────────────────────────
   useEffect(() => {
-    mountedRef.current = true
     if (!SpeechAPI) return
+    stopRef.current = false
 
-    const rec = new SpeechAPI()
-    rec.lang            = 'en-US'
-    rec.continuous      = true
-    rec.interimResults  = false
-    rec.maxAlternatives = 1
+    let cycleCount = 0
 
-    rec.onresult = (event) => {
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const r = event.results[i]
-        if (r[0]) handlerRef.current(r[0].transcript, r[0].confidence ?? 0.8)
+    function startCycle() {
+      if (stopRef.current) return
+      cycleCount++
+      const n = cycleCount
+      L.info(`cycle #${n} started`)
+
+      const rec = new SpeechAPI!()
+      activeRecRef.current = rec   // register as the ONE active instance
+
+      rec.lang            = 'en-US'
+      rec.continuous      = false
+      rec.interimResults  = false
+      rec.maxAlternatives = 5
+
+      rec.onresult = (event) => {
+        if (activeRecRef.current !== rec) return  // stale — ignore
+        const alts: { transcript: string; confidence: number }[] = []
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const r = event.results[i]
+          if (!r.isFinal) continue
+          for (let j = 0; j < r.length; j++) {
+            if (r[j]?.transcript) alts.push({ transcript: r[j].transcript, confidence: r[j].confidence ?? 0.8 })
+          }
+        }
+        L.info(`cycle #${n} got ${alts.length} alt(s):`, alts.map(a => `"${a.transcript}"`).join(', '))
+
+        L.info(`cycle #${n} phase="${phaseRef.current}"`)
+
+        if (phaseRef.current === 'watching') {
+          for (const { transcript, confidence } of alts) {
+            if (hasWakeWord(transcript.toLowerCase())) {
+              handleTranscript(transcript, confidence)
+              return
+            }
+          }
+          L.info('no wake word in any alternative — staying in watch mode')
+        } else if (phaseRef.current === 'listening') {
+          for (const { transcript, confidence } of alts) {
+            const prev = phaseRef.current
+            handleTranscript(transcript, confidence)
+            if (phaseRef.current !== prev) return
+          }
+        } else {
+          // 'success' or 'error' — still try a same-breath wake+command so a fast
+          // second utterance ("audient start" right after a previous command) isn't lost
+          L.warn(`cycle #${n} result arrived during phase="${phaseRef.current}" — attempting wake+cmd anyway`)
+          for (const { transcript } of alts) {
+            if (hasWakeWord(transcript.toLowerCase())) {
+              const afterWake = stripWakeWord(transcript.toLowerCase())
+              if (afterWake) {
+                const cmd = matchCommand(afterWake)
+                if (cmd) { L.info('late same-breath cmd:', cmd); dispatch(cmd, afterWake, 1.0); return }
+              }
+            }
+          }
+        }
+      }
+
+      rec.onend = () => {
+        // Guard: only the instance that is still "active" may schedule the next cycle.
+        // Chrome fires onend AFTER onerror('aborted') on stale instances — this check
+        // prevents the duplicate-cycle runaway that caused the #62 doubling issue.
+        if (activeRecRef.current !== rec) {
+          L.info(`cycle #${n} stale onend ignored`)
+          return
+        }
+        activeRecRef.current = null
+        L.info(`cycle #${n} ended — restarting in 300 ms`)
+        if (!stopRef.current) setTimeout(startCycle, 300)
+      }
+
+      rec.onerror = (e) => {
+        if (e.error === 'aborted' || e.error === 'no-speech') {
+          // Expected — aborted fires when a new cycle starts before this one finishes,
+          // no-speech fires on silence. Both are harmless; onend handles the restart.
+          L.info(`cycle #${n} ok-error (${e.error}) — onend will restart`)
+          return
+        }
+        if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+          L.error('Microphone permission denied — vocal prompts disabled')
+          setP('off')
+          stopRef.current = true
+          return
+        }
+        L.warn(`cycle #${n} error:`, e.error)
+      }
+
+      try {
+        rec.start()
+        L.info(`cycle #${n} listening…`)
+      } catch (err) {
+        L.error(`cycle #${n} failed to start:`, err)
+        activeRecRef.current = null
+        if (!stopRef.current) setTimeout(startCycle, 300)
       }
     }
 
-    rec.onend = () => {
-      // Auto-restart while still active (recognition stops after long silence)
-      if (phaseRef.current !== 'off') {
-        try { rec.start() } catch { /* already starting */ }
-      }
-    }
-
-    rec.onerror = (e) => {
-      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') setP('off')
-      // 'no-speech' and 'aborted' are normal — onend will restart
-    }
-
-    recRef.current = rec
-    try { rec.start() } catch { /* ignore */ }
+    startCycle()
 
     return () => {
-      mountedRef.current    = false
-      phaseRef.current      = 'off'
+      stopRef.current = true
       if (cmdTimerRef.current) clearTimeout(cmdTimerRef.current)
-      recRef.current?.stop()
-      recRef.current = null
+      setP('off')
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 

@@ -614,8 +614,9 @@ export default function SessionDetailPage() {
   const cfg        = statusConfig[conv.status] ?? statusConfig.complete
   const isApproved = conv.status === 'approved'
   const isOwner    = !conv.my_permission
-  /** Owner or anyone with shared access (including read-only consult access). Backend allows comments at read level. */
-  const canUseSessionChat = isOwner || !!conv.my_permission
+  // Non-owners always see chat (they have explicit access = a consult is happening).
+  // Owners only see it once they've shared the session with at least one colleague.
+  const canUseSessionChat = !isOwner || grants.length > 0
 
   const hasSummary = summary && (
     summary.patient_name || summary.patient_age || summary.patient_gender ||

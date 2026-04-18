@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Search, Plus, Clock, Mic,
@@ -60,6 +60,7 @@ const statusConfig = {
 // ── Session Card ─────────────────────────────────────────────
 function SessionCard({ conv, index }: { conv: Conv; index: number }) {
   const cfg = statusConfig[conv.status]
+  const navigate = useNavigate()
 
   return (
     <motion.div
@@ -82,15 +83,15 @@ function SessionCard({ conv, index }: { conv: Conv; index: number }) {
               <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                 <p className="text-xs text-slate-500">{timeAgo(conv.created_at)}</p>
                 {conv.patient_code && (
-                  <Link
-                    to={`/patients/${conv.patient_id}`}
-                    onClick={e => e.stopPropagation()}
+                  <button
+                    type="button"
+                    onClick={e => { e.preventDefault(); e.stopPropagation(); navigate(`/patients/${conv.patient_id}`) }}
                     className="inline-flex items-center gap-1 text-[10px] font-mono font-semibold text-brand-400 bg-brand-500/10 border border-brand-500/20 rounded-full px-2 py-0.5 hover:bg-brand-500/20 transition-colors"
                     title={conv.patient_name ?? undefined}
                   >
                     <Tag size={9} />
                     {conv.patient_code}
-                  </Link>
+                  </button>
                 )}
               </div>
             </div>

@@ -1,7 +1,7 @@
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useEffect, useRef, useState } from 'react'
 import {
-  Mic, Settings, Radio, LayoutDashboard, LineChart, LogOut, Moon, Sun, ShieldCheck, LayoutTemplate, Users, MessageSquare, Bell,
+  Mic, Settings, LayoutDashboard, LineChart, LogOut, Moon, Sun, ShieldCheck, LayoutTemplate, Users, MessageSquare, Bell,
 } from 'lucide-react'
 import { useTheme } from '../providers/ThemeProvider'
 import { cn } from '../../utils/cn'
@@ -11,14 +11,12 @@ import { getSpecialtyUi } from '../../lib/specialtyUi'
 import api from '../../lib/api'
 
 const navItems = [
-  { to: '/app',       label: 'Dashboard',       icon: LayoutDashboard },
-  { to: '/live',      label: 'Live Session',     icon: Radio           },
-  { to: '/asr',       label: 'Record & Extract', icon: Mic             },
-  { to: '/patients',  label: 'Patients',         icon: Users           },
-  { to: '/consults',  label: 'Consultations',    icon: MessageSquare   },
-  { to: '/analytics', label: 'Analytics',        icon: LineChart       },
-  { to: '/templates', label: 'Templates',        icon: LayoutTemplate  },
-  { to: '/settings',  label: 'Settings',         icon: Settings        },
+  { to: '/app',       label: 'Dashboard',    icon: LayoutDashboard },
+  { to: '/patients',  label: 'Patients',     icon: Users           },
+  { to: '/consults',  label: 'Consultations',icon: MessageSquare   },
+  { to: '/analytics', label: 'Analytics',    icon: LineChart       },
+  { to: '/templates', label: 'Templates',    icon: LayoutTemplate  },
+  { to: '/settings',  label: 'Settings',     icon: Settings        },
 ]
 
 const NOTIF_TYPE_LABEL: Record<string, string> = {

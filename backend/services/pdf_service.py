@@ -163,7 +163,7 @@ def _chrome_teal_rx_pad(branding: dict, tr: PdfThemeResolved, audience: str) -> 
 
         canv.setFillColor(_WHITE)
         canv.setFont("Helvetica-Bold", 14)
-        canv.drawString(x_txt, Hp - hh + 2.25 * cm, name or "Audient AI")
+        canv.drawString(x_txt, Hp - hh + 2.25 * cm, name)
 
         if title:
             canv.setFillColor(pale)
@@ -187,7 +187,7 @@ def _chrome_teal_rx_pad(branding: dict, tr: PdfThemeResolved, audience: str) -> 
 
         # Page border + footer
         _page_border(canv, tr.accent_hex)
-        brand = (branding.get("clinic_name") or branding.get("doctor_name") or "Audient AI").strip()
+        brand = (branding.get("clinic_name") or branding.get("doctor_name") or "").strip()
         _page_footer(canv, doc, brand, tr.accent_hex, tr.bottom_margin)
 
         canv.restoreState()
@@ -231,7 +231,7 @@ def _chrome_navy_letterhead(branding: dict, tr: PdfThemeResolved, audience: str)
 
         canv.setFillColor(_WHITE)
         canv.setFont("Helvetica-Bold", 15)
-        canv.drawString(x_txt, Hp - hh + 2.8 * cm, name or "Audient AI")
+        canv.drawString(x_txt, Hp - hh + 2.8 * cm, name)
 
         if title:
             canv.setFillColor(pale)
@@ -264,7 +264,7 @@ def _chrome_navy_letterhead(branding: dict, tr: PdfThemeResolved, audience: str)
             canv.drawRightString(Wp - 0.7 * cm, Hp - hh + 0.38 * cm, "Rx")
 
         _page_border(canv, tr.accent_hex)
-        brand = (branding.get("clinic_name") or branding.get("doctor_name") or "Audient AI").strip()
+        brand = (branding.get("clinic_name") or branding.get("doctor_name") or "").strip()
         _page_footer(canv, doc, brand, tr.accent_hex, tr.bottom_margin)
 
         canv.restoreState()
@@ -330,7 +330,7 @@ def _chrome_emerald_sidebar(branding: dict, tr: PdfThemeResolved, audience: str)
         canv.saveState()
         canv.translate(sw / 2, rot_center_y)
         canv.rotate(90)
-        lbl = (clinic or name or "Audient AI")[:28]
+        lbl = (clinic or name or "")[:28]
         canv.drawCentredString(0, -3, lbl)
         canv.restoreState()
 
@@ -347,13 +347,14 @@ def _chrome_emerald_sidebar(branding: dict, tr: PdfThemeResolved, audience: str)
         canv.line(Wp - m, m, Wp - m, Hp - m)
         canv.line(Wp - m, Hp - m, sw + m * 0.3, Hp - m)
 
-        brand = (branding.get("clinic_name") or branding.get("doctor_name") or "Audient AI").strip()
+        brand = (branding.get("clinic_name") or branding.get("doctor_name") or "").strip()
         canv.setFont("Helvetica", 6.5)
         canv.setFillColor(rl_colors.HexColor("#6b7280"))
+        footer_line = f"{brand}  ·  Page {doc.page}" if brand else f"Page {doc.page}"
         canv.drawCentredString(
             sw + (Wp - sw) / 2,
             tr.bottom_margin * 0.38,
-            f"{brand}  ·  Page {doc.page}",
+            footer_line,
         )
 
         # Badge text at top-right of content area
@@ -408,7 +409,7 @@ def _chrome_classic_blue(branding: dict, tr: PdfThemeResolved, audience: str) ->
 
         canv.setFillColor(_WHITE)
         canv.setFont("Helvetica-Bold", 14.5)
-        canv.drawString(x_txt, Hp - main_h + main_h * 0.65, name or "Audient AI")
+        canv.drawString(x_txt, Hp - main_h + main_h * 0.65, name)
 
         if title:
             canv.setFillColor(pale)
@@ -430,7 +431,7 @@ def _chrome_classic_blue(branding: dict, tr: PdfThemeResolved, audience: str) ->
         canv.drawRightString(Wp - 0.7 * cm, Hp - main_h + main_h * 0.42, sub)
 
         _page_border(canv, tr.accent_hex)
-        brand = (branding.get("clinic_name") or branding.get("doctor_name") or "Audient AI").strip()
+        brand = (branding.get("clinic_name") or branding.get("doctor_name") or "").strip()
         _page_footer(canv, doc, brand, tr.accent_hex, tr.bottom_margin)
 
         canv.restoreState()
@@ -487,7 +488,7 @@ def _chrome_burgundy_specialist(branding: dict, tr: PdfThemeResolved, audience: 
 
         canv.setFillColor(_WHITE)
         canv.setFont("Helvetica-Bold", 15)
-        canv.drawString(lm, Hp - upper_h + upper_h * 0.66, name or "Audient AI")
+        canv.drawString(lm, Hp - upper_h + upper_h * 0.66, name)
 
         if title:
             canv.setFillColor(pale)
@@ -516,7 +517,7 @@ def _chrome_burgundy_specialist(branding: dict, tr: PdfThemeResolved, audience: 
         canv.drawRightString(Wp - 0.8 * cm, Hp - upper_h + upper_h * 0.44, sub)
 
         _page_border(canv, tr.accent_hex)
-        brand = (branding.get("clinic_name") or branding.get("doctor_name") or "Audient AI").strip()
+        brand = (branding.get("clinic_name") or branding.get("doctor_name") or "").strip()
         _page_footer(canv, doc, brand, tr.accent_hex, tr.bottom_margin)
 
         canv.restoreState()
@@ -554,7 +555,7 @@ def _chrome_minimal_clean(branding: dict, tr: PdfThemeResolved, audience: str) -
 
         canv.setFillColor(ink)
         canv.setFont("Helvetica-Bold", 13)
-        canv.drawString(lm, Hp - hh + hh * 0.72, name or "Audient AI")
+        canv.drawString(lm, Hp - hh + hh * 0.72, name)
 
         if title:
             canv.setFillColor(muted)
@@ -588,7 +589,7 @@ def _chrome_minimal_clean(branding: dict, tr: PdfThemeResolved, audience: str) -
         canv.setLineWidth(0.3)
         canv.rect(m, m, Wp - 2 * m, Hp - 2 * m, stroke=1, fill=0)
 
-        brand = (branding.get("clinic_name") or branding.get("doctor_name") or "Audient AI").strip()
+        brand = (branding.get("clinic_name") or branding.get("doctor_name") or "").strip()
         _page_footer(canv, doc, brand, tr.accent_hex, tr.bottom_margin)
 
         canv.restoreState()
@@ -784,15 +785,19 @@ def _build_signature_block(
 
     if audience == "patient":
         footer_text = (
-            f"Prepared under the direction of <b>{brand_name}</b>. "
-            "This document is for your personal health records and education only. "
-            "Always follow your clinician's specific advice for your treatment and follow-up care."
+            f"Prepared by <b>{brand_name}</b>. "
+            "This document is for your personal health records. "
+            "Always follow your doctor's specific advice regarding your treatment and follow-up care."
+        ) if brand_name else (
+            "This document is for your personal health records. "
+            "Always follow your doctor's specific advice regarding your treatment and follow-up care."
         )
     else:
         footer_text = (
-            f"AI-assisted clinical documentation — <b>{brand_name}</b>. "
-            "<b>Verify all AI-generated fields for accuracy before filing, billing, or medicolegal use.</b> "
-            "This record is confidential and intended solely for the named provider."
+            f"<b>{brand_name}</b>. "
+            "This record is confidential and intended solely for the treating clinician."
+        ) if brand_name else (
+            "This record is confidential and intended solely for the treating clinician."
         )
 
     footer_para = Paragraph(footer_text, st["footer"])
@@ -844,13 +849,14 @@ def generate_session_pdf(conv: "Conversation", audience: str = "clinical") -> by
             "logo_url":       getattr(user, "logo_url",       None),
         }
 
-    brand_name = (branding.get("clinic_name") or branding.get("doctor_name") or "Audient AI").strip()
+    brand_name = (branding.get("clinic_name") or branding.get("doctor_name") or "").strip()
+    doc_author = (branding.get("doctor_name") or brand_name or "").strip()
 
     buf = io.BytesIO()
     doc_title = (
-        f"Patient Visit Summary — {conv.title or 'Session'}"
+        f"Patient Visit Summary — {conv.title or 'Consultation'}"
         if audience == "patient"
-        else f"Clinical Note — {conv.title or 'Session'}"
+        else f"Clinical Note — {conv.title or 'Consultation'}"
     )
     doc = SimpleDocTemplate(
         buf, pagesize=A4,
@@ -858,14 +864,15 @@ def generate_session_pdf(conv: "Conversation", audience: str = "clinical") -> by
         rightMargin=tr.right_margin,
         topMargin=tr.top_margin,
         bottomMargin=tr.bottom_margin,
-        title=doc_title, author="Audient AI",
+        title=doc_title, author=doc_author,
     )
     W = A4[0] - tr.left_margin - tr.right_margin
     story: list = []
 
-    gen_date = datetime.now(timezone.utc).strftime("%d %b %Y  %H:%M UTC")
+    visit_date = conv.created_at.strftime("%d %b %Y") if conv.created_at else datetime.now(timezone.utc).strftime("%d %b %Y")
+    ref_no = conv.id[:8].upper()
     story.append(Paragraph(
-        f"Generated: {gen_date} &nbsp;·&nbsp; Session ID: {conv.id[:16]}…",
+        f"Date of visit: {visit_date} &nbsp;·&nbsp; Ref: {ref_no}",
         ParagraphStyle("sub", parent=st["label"], fontSize=7),
     ))
     story.append(Spacer(1, 0.25 * cm))

@@ -14,7 +14,7 @@ import { RecordButton }  from '../components/visual/RecordButton'
 import { SpeakerBubble } from '../components/visual/SpeakerBubble'
 import { VocalPromptsIndicator } from '../components/VocalPromptsIndicator'
 import { useVocalPrompts } from '../hooks/useVocalPrompts'
-import { speak }         from '../lib/vocalAudio'
+import { speak, primeAudio } from '../lib/vocalAudio'
 import { useLiveSession, type Segment, type LiveFields } from '../hooks/useLiveSession'
 import { useToast }      from '../components/ui/Toaster'
 import api from '../lib/api'
@@ -315,6 +315,7 @@ export default function LiveSessionPage() {
 
   // ── Actions ─────────────────────────────────────────────────────────────────
   const handleStart = useCallback(async () => {
+    primeAudio()  // unlock AudioContext during this user gesture
     isSavingRef.current = false
     setSavedId(null)
     setSegments([])
@@ -362,7 +363,7 @@ export default function LiveSessionPage() {
     }
   }, [liveFields])
 
-  const { phase: vocalPhase, supported: vocalSupported, lastCmd: vocalLastCmd } = useVocalPrompts({
+  const { phase: vocalPhase, supported: vocalSupported, lastCmd: vocalLastCmd, lastHeard: vocalLastHeard } = useVocalPrompts({
     sessionId:         sessionId,
     onStart:           () => { if (!active) handleStart() },
     onStop:            () => { if (active)  handleStop()  },
@@ -392,6 +393,7 @@ export default function LiveSessionPage() {
       <VocalPromptsIndicator
         phase={vocalPhase}
         lastCmd={vocalLastCmd}
+        lastHeard={vocalLastHeard}
         supported={vocalSupported}
       />
 
@@ -653,16 +655,6 @@ export default function LiveSessionPage() {
               </Card>
             )}
 
-            <Card variant="flat" className="p-4">
-              <h3 className="text-xs font-semibold text-slate-400 mb-3 uppercase tracking-wide">Tips</h3>
-              <ul className="space-y-2 text-xs text-slate-500">
-                <li>· Overlapping 6s windows prevent word cutoffs</li>
-                <li>· Speakers re-labelled every 15 seconds</li>
-                <li>· Fields extracted live every 60 seconds</li>
-                <li>· Add patient mic for better separation</li>
-                <li>· Session auto-saves when you end</li>
-              </ul>
-            </Card>
           </div>
 
         </div>

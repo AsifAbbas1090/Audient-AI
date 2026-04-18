@@ -1,22 +1,46 @@
 """
 Background task: process a completed live session.
 
-Pipeline (runs in Celery worker or daemon thread):
-  1. Diarize segments (Groq LLM — assign Doctor/Patient labels)
-  2. Extract medical fields (Groq LLaMA)
-  3. Save transcript + summary to DB
-  4. Generate field reminders
-  5. Update conversation status to "complete"
+Pipeline — optimised for minimum wall-clock time:
 
-If REDIS_URL is not set (no Celery worker), `dispatch()` runs this
-logic in a background daemon thread so /complete returns immediately.
+  Phase 1 (parallel)  diarize  ──┐
+                      extract  ──┴─► both Groq calls run at the same time
+
+  Phase 2 (serial)    save transcript + create summary row
+
+  Phase 3 (parallel)  followups        ──┐
+                      patient-facing   ──┴─► both Groq calls run at the same time
+
+  Phase 4 (serial)    field reminders, mark complete, email
+
+Diarization is skipped entirely when the live session already assigned
+Doctor/Patient labels (it diarizes every 15 s during recording).
 """
 from __future__ import annotations
+import time
 import threading
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_EXCEPTION
 from celery_app import celery
 
 
-# ── The actual Celery task ───────────────────────────────────────────────────
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+def _already_diarized(segments: list) -> bool:
+    """True when the live session has already labeled ≥50 % of segments."""
+    if not segments:
+        return True
+    labeled = sum(
+        1 for s in segments
+        if s.get("speaker") and s["speaker"] not in ("Speaker 1", "Speaker 2", "")
+    )
+    return labeled >= len(segments) * 0.5
+
+
+def _raw_text(segments: list) -> str:
+    return " ".join((s.get("text") or "").strip() for s in segments if s.get("text")).strip()
+
+
+# ── Celery task ───────────────────────────────────────────────────────────────
 
 @celery.task(bind=True, max_retries=1, name="tasks.process_session")
 def process_session_task(
@@ -26,60 +50,124 @@ def process_session_task(
     language: str,
     duration: int | None,
 ):
-    """
-    Celery task.  Runs inside a Flask app context (wired in app.py).
-    Imports are deferred so this module loads cleanly without a running app.
-    """
     from extensions import db
     from models.conversation import Conversation
     from services.diarize_service import diarize_with_groq, split_segments_by_sentence
     from services.extract_service import extract, generate_followups
+    from services.patient_facing_service import generate_patient_facing_summary
     from routes.conversations import (
         _save_transcript,
         _save_summary,
         _generate_field_reminders,
         _auto_title,
-        _fill_patient_facing_summary,
     )
 
     conv = Conversation.query.get(conv_id)
     if not conv:
         return {"error": "Conversation not found"}
 
+    t0      = time.time()
+    specialty = conv.user.specialty if conv.user else None
+
+    def elapsed():
+        return f"{time.time() - t0:.1f}s"
+
     try:
-        # ── Step 1: diarize ──────────────────────────────────────────────
-        # Split into sentence-level segments first so the LLM has enough
-        # context lines even when Whisper returns only 1-2 large segments.
-        segments = split_segments_by_sentence(segments)
-        if len(segments) >= 2:
-            segments = diarize_with_groq(segments)
+        # ── Prepare ───────────────────────────────────────────────────────
+        segments  = split_segments_by_sentence(segments)
+        text      = _raw_text(segments)
+        skip_diar = _already_diarized(segments) or len(segments) < 2
 
-        # ── Step 2: extract medical fields ───────────────────────────────
-        raw_text  = " ".join((s.get("text") or "").strip() for s in segments if s.get("text"))
-        specialty = conv.user.specialty if conv.user else None
-        extraction = extract(raw_text, specialty=specialty) if raw_text.strip() else {}
+        print(f"[task] {conv_id} | segments={len(segments)} skip_diar={skip_diar}")
 
-        # ── Step 3: persist transcript ───────────────────────────────────
-        # Remove any existing transcript (idempotent re-save)
+        # ── Phase 1: diarize + extract in parallel ────────────────────────
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="p1") as pool:
+            diar_fut = (
+                None if skip_diar
+                else pool.submit(diarize_with_groq, segments)
+            )
+            extr_fut = pool.submit(extract, text, specialty) if text else None
+
+            if diar_fut:
+                try:
+                    segments = diar_fut.result(timeout=35)
+                    print(f"[task] diarize done @ {elapsed()}")
+                except Exception as e:
+                    print(f"[task] diarize failed: {e}")
+
+            extraction: dict = {}
+            if extr_fut:
+                try:
+                    extraction = extr_fut.result(timeout=35)
+                    print(f"[task] extract done @ {elapsed()}")
+                except Exception as e:
+                    print(f"[task] extract failed: {e}")
+
+        # ── Phase 2: persist transcript ───────────────────────────────────
         if conv.transcript:
             db.session.delete(conv.transcript)
             db.session.flush()
         _save_transcript(conv_id, segments, language=language)
+        print(f"[task] transcript saved @ {elapsed()}")
 
-        # ── Step 4: persist summary + reminders ──────────────────────────
-        if not extraction.get("skipped") and not extraction.get("error"):
+        # ── Phase 3: followups + patient-facing in parallel ───────────────
+        good_extraction = (
+            extraction
+            and not extraction.get("skipped")
+            and not extraction.get("error")
+        )
+
+        if good_extraction:
             if conv.summary:
                 db.session.delete(conv.summary)
                 db.session.flush()
-            followups = generate_followups(raw_text, extraction, specialty=specialty)
-            _save_summary(conv_id, extraction, followups=followups)
 
-        db.session.flush()
-        if conv.summary:
-            _fill_patient_facing_summary(conv, raw_text)
-            _generate_field_reminders(conv.summary)
+            # Create summary row now so field-reminders can reference it
+            _save_summary(conv_id, extraction, followups=[])
+            db.session.flush()
 
-        # ── Step 5: mark complete ─────────────────────────────────────────
+            # Build plain-dict snapshot for threads (no SQLAlchemy objects)
+            summary_data = {
+                "patient_name":   extraction.get("Name"),
+                "patient_age":    extraction.get("Age"),
+                "patient_gender": extraction.get("Gender"),
+                "disease":        extraction.get("Disease"),
+                "education":      extraction.get("Education"),
+                "emotional_state":extraction.get("EmotionalState"),
+                "additional_notes":extraction.get("AdditionalNotes"),
+            }
+
+            followups     : list       = []
+            patient_facing: str | None = None
+
+            with ThreadPoolExecutor(max_workers=2, thread_name_prefix="p3") as pool:
+                fol_fut = pool.submit(generate_followups, text, extraction, specialty)
+                pf_fut  = pool.submit(
+                    generate_patient_facing_summary, text, summary_data, specialty
+                )
+
+                try:
+                    followups = fol_fut.result(timeout=35) or []
+                    print(f"[task] followups done @ {elapsed()}")
+                except Exception as e:
+                    print(f"[task] followups failed: {e}")
+
+                try:
+                    patient_facing = pf_fut.result(timeout=35)
+                    print(f"[task] patient_facing done @ {elapsed()}")
+                except Exception as e:
+                    print(f"[task] patient_facing failed: {e}")
+
+            # Apply threaded results back onto the summary row
+            s = conv.summary
+            if s:
+                if followups:
+                    s.follow_up_questions = followups
+                if patient_facing:
+                    s.patient_facing_summary = patient_facing
+                _generate_field_reminders(s)
+
+        # ── Phase 4: finalise ─────────────────────────────────────────────
         conv.status   = "complete"
         conv.title    = conv.title or _auto_title(segments)
         conv.language = language or conv.language or "Unknown"
@@ -87,75 +175,65 @@ def process_session_task(
             conv.duration = duration
 
         db.session.commit()
-        print(f"[task] process_session {conv_id} → complete")
+        print(f"[task] {conv_id} complete in {elapsed()}")
 
-        # ── Step 6: email notifications (non-blocking, best-effort) ──────
         _send_notifications(conv)
-
         return {"success": True, "conversation_id": conv_id}
 
     except Exception as exc:
         db.session.rollback()
-        # Mark as failed so the frontend can show an error state
         try:
             conv.status = "failed"
             db.session.commit()
         except Exception:
             db.session.rollback()
-        print(f"[task] process_session {conv_id} → FAILED: {exc}")
+        print(f"[task] {conv_id} FAILED @ {elapsed()}: {exc}")
         raise self.retry(exc=exc, countdown=5) if self.request.retries < 1 else exc
 
 
+# ── Email notifications ───────────────────────────────────────────────────────
+
 def _send_notifications(conv) -> None:
-    """
-    Send email notifications after a session completes.
-    Non-blocking — any error here is logged but never re-raises.
-    """
     try:
         from config import Config
         from models.user import User
         from services.email_service import notify_session_complete, notify_field_alert
 
         if not Config.RESEND_API_KEY:
-            return   # email not configured — skip silently
+            return
 
-        # Find the session owner's email
         owner = User.query.get(conv.user_id) if conv.user_id else None
         if not owner or not owner.email:
             return
 
         summary_dict = conv.summary.to_dict() if conv.summary else {}
-
-        # Send "session ready" notification
         notify_session_complete(
-            to_email = owner.email,
-            conv_id  = conv.id,
-            title    = conv.title or "Untitled Session",
-            summary  = summary_dict,
-            app_url  = Config.APP_URL,
+            to_email=owner.email,
+            conv_id=conv.id,
+            title=conv.title or "Untitled Session",
+            summary=summary_dict,
+            app_url=Config.APP_URL,
         )
 
-        # Send field-alert if any critical fields are missing
-        missing = []
         if conv.summary and conv.summary.field_reminders:
             missing = [
                 r.field_name.replace("_", " ").title()
                 for r in conv.summary.field_reminders
                 if not r.is_resolved and r.severity == "critical"
             ]
-        if missing:
-            notify_field_alert(
-                to_email = owner.email,
-                conv_id  = conv.id,
-                title    = conv.title or "Untitled Session",
-                missing  = missing,
-                app_url  = Config.APP_URL,
-            )
+            if missing:
+                notify_field_alert(
+                    to_email=owner.email,
+                    conv_id=conv.id,
+                    title=conv.title or "Untitled Session",
+                    missing=missing,
+                    app_url=Config.APP_URL,
+                )
     except Exception as e:
-        print(f"[task/email] notification failed for {conv.id}: {e}")
+        print(f"[task/email] {conv.id}: {e}")
 
 
-# ── Dispatch helper ─────────────────────────────────────────────────────────
+# ── Dispatch helper ───────────────────────────────────────────────────────────
 
 def dispatch(
     app,
@@ -164,31 +242,21 @@ def dispatch(
     language: str,
     duration: int | None,
 ) -> str | None:
-    """
-    Send the task to the queue (Celery) or run it in a daemon thread (no Redis).
-
-    Returns the Celery task_id string, or None in thread mode.
-    Callers should not block on the result — poll /api/conversations/:id/status.
-    """
     from config import Config
 
     if Config.REDIS_URL:
-        # True background queue — Celery worker picks it up
         result = process_session_task.apply_async(
             args=[conv_id, segments, language, duration],
             countdown=0,
         )
         return result.id
     else:
-        # No Redis — run in a daemon thread so the HTTP response still
-        # returns immediately while processing happens in the background.
         def _run():
             with app.app_context():
                 try:
                     process_session_task(conv_id, segments, language, duration)
                 except Exception as e:
-                    print(f"[thread] process_session {conv_id} failed: {e}")
+                    print(f"[thread] {conv_id} failed: {e}")
 
-        t = threading.Thread(target=_run, daemon=True)
-        t.start()
+        threading.Thread(target=_run, daemon=True).start()
         return None
