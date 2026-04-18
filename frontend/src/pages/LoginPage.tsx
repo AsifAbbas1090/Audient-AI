@@ -46,14 +46,14 @@ function ForgotPasswordModal({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-      <div className="w-full max-w-sm bg-surface-100 border border-white/10 rounded-2xl shadow-2xl p-6">
+      <div className="w-full max-w-sm bg-surface-100 border border-white/10 rounded-2xl shadow-2xl p-6 light:bg-white light:border-slate-200">
 
         <div className="flex items-center justify-between mb-5">
           <div className="flex items-center gap-2">
             <KeyRound size={16} className="text-brand-400" />
-            <h2 className="font-display font-bold text-white">Reset Password</h2>
+            <h2 className="font-display font-bold text-white light:text-slate-900">Reset Password</h2>
           </div>
-          <button onClick={onClose} className="text-slate-500 hover:text-slate-300 transition-colors">
+          <button onClick={onClose} className="text-slate-500 hover:text-slate-300 light:hover:text-slate-700 transition-colors">
             <X size={18} />
           </button>
         </div>
@@ -204,20 +204,20 @@ export default function LoginPage() {
       </div>
 
       {/* ── Right form panel ────────────────────────────────── */}
-      <div className="flex-1 flex flex-col items-center justify-center px-6 py-12 bg-surface-400">
+      <div className="flex-1 flex flex-col items-center justify-center px-6 py-12 bg-surface-400 light:bg-slate-50">
 
         {/* Mobile logo */}
         <div className="lg:hidden flex items-center gap-2 mb-10">
           <div className="h-9 w-9 rounded-xl bg-brand-600 flex items-center justify-center">
             <Mic size={16} className="text-white" />
           </div>
-          <span className="font-display font-bold text-white">Audient AI</span>
+          <span className="font-display font-bold text-white light:text-slate-900">Audient AI</span>
         </div>
 
         <div className="w-full max-w-sm space-y-8">
           <div>
-            <h2 className="font-display font-bold text-2xl text-white">Welcome back</h2>
-            <p className="text-slate-400 text-sm mt-1">Sign in to your account to continue</p>
+            <h2 className="font-display font-bold text-2xl text-white light:text-slate-900">Welcome back</h2>
+            <p className="text-slate-400 light:text-slate-600 text-sm mt-1">Sign in to your account to continue</p>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -267,9 +267,9 @@ export default function LoginPage() {
 
           <div className="relative">
             <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-white/8" />
+              <div className="w-full border-t border-white/8 light:border-slate-200" />
             </div>
-            <div className="relative flex justify-center text-xs text-slate-600 px-3 bg-surface-400">
+            <div className="relative flex justify-center text-xs text-slate-600 px-3 bg-surface-400 light:bg-slate-50">
               or
             </div>
           </div>

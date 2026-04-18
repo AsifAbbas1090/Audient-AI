@@ -141,14 +141,14 @@ export default function SignupPage() {
     <div className="min-h-screen flex">
       {BrandPanel}
 
-      <div className="flex-1 flex flex-col items-center justify-center px-6 py-12 bg-surface-400 overflow-y-auto">
+      <div className="flex-1 flex flex-col items-center justify-center px-6 py-12 bg-surface-400 light:bg-slate-50 overflow-y-auto">
 
         {/* Mobile logo */}
         <div className="lg:hidden flex items-center gap-2 mb-10">
           <div className="h-9 w-9 rounded-xl bg-brand-600 flex items-center justify-center">
             <Mic size={16} className="text-white" />
           </div>
-          <span className="font-display font-bold text-white">Audient AI</span>
+          <span className="font-display font-bold text-white light:text-slate-900">Audient AI</span>
         </div>
 
         <div className="w-full max-w-sm space-y-8">
@@ -175,7 +175,7 @@ export default function SignupPage() {
           {step === 1 && (
             <>
               <div>
-                <h2 className="font-display font-bold text-2xl text-white">Create your account</h2>
+                <h2 className="font-display font-bold text-2xl text-white light:text-slate-900">Create your account</h2>
                 <p className="text-slate-400 text-sm mt-1">Start transcribing in under a minute</p>
               </div>
 
@@ -283,7 +283,7 @@ export default function SignupPage() {
           {step === 2 && (
             <>
               <div>
-                <h2 className="font-display font-bold text-2xl text-white">Your clinical profile</h2>
+                <h2 className="font-display font-bold text-2xl text-white light:text-slate-900">Your clinical profile</h2>
                 <p className="text-slate-400 text-sm mt-1">
                   Personalises AI summaries and PDF templates to your specialty
                 </p>

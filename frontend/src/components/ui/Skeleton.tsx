@@ -12,7 +12,7 @@ export function Skeleton({ className, ...props }: React.HTMLAttributes<HTMLDivEl
 
 export function SkeletonCard({ className }: { className?: string }) {
   return (
-    <div className={cn('rounded-2xl border border-white/8 bg-white/4 p-6 space-y-3', className)}>
+    <div className={cn('rounded-2xl border border-white/8 bg-white/4 p-6 space-y-3 light:border-slate-200 light:bg-slate-100/80', className)}>
       <Skeleton className="h-4 w-2/3" />
       <Skeleton className="h-3 w-1/3" />
       <div className="space-y-2 pt-2">

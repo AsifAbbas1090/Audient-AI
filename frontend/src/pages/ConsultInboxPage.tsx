@@ -90,7 +90,7 @@ function ConsultRow({
     <Card variant="elevated" className="p-4">
       <div className="flex items-start gap-3">
         {/* Mode icon */}
-        <div className="h-9 w-9 rounded-xl bg-white/4 border border-white/8 flex items-center justify-center shrink-0 mt-0.5">
+        <div className="h-9 w-9 rounded-xl bg-white/4 border border-white/8 light:bg-slate-100 light:border-slate-200 flex items-center justify-center shrink-0 mt-0.5">
           <MessageSquare size={15} className="text-brand-400" />
         </div>
 
@@ -333,10 +333,10 @@ export default function ConsultInboxPage() {
   const list = tab === 'received' ? received : sent
 
   return (
-    <div className="min-h-screen flex bg-surface-400">
+    <div className="app-page">
       <Sidebar />
 
-      <main className="flex-1 flex flex-col overflow-hidden">
+      <main className="flex-1 flex flex-col overflow-hidden light:bg-slate-100">
         {/* Header */}
         <header className="shrink-0 border-b border-white/8 px-6 py-4 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
@@ -344,7 +344,7 @@ export default function ConsultInboxPage() {
               <MessageSquare size={16} className="text-brand-400" />
             </div>
             <div>
-              <h1 className="font-display font-bold text-lg text-white leading-none">Consultations</h1>
+              <h1 className="font-display font-bold text-lg text-white light:text-slate-900 leading-none">Consultations</h1>
               <p className="text-xs text-slate-500 mt-0.5">Peer review requests</p>
             </div>
             {pendingCount > 0 && (

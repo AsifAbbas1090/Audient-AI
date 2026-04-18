@@ -136,16 +136,16 @@ export default function AdminPage() {
     : []
 
   return (
-    <div className="min-h-screen bg-surface-400">
+    <div className="min-h-screen bg-surface-400 light:bg-slate-100">
 
       {/* ── Top bar ─────────────────────────────────────── */}
-      <header className="sticky top-0 z-30 border-b border-white/8 bg-surface-400/80 backdrop-blur px-6 py-4 flex items-center justify-between">
+      <header className="sticky top-0 z-30 border-b border-white/8 bg-surface-400/80 backdrop-blur px-6 py-4 flex items-center justify-between light:border-slate-200 light:bg-white/90">
         <div className="flex items-center gap-3">
           <div className="h-8 w-8 rounded-xl bg-brand-600 flex items-center justify-center">
             <Mic size={15} className="text-white" />
           </div>
           <div>
-            <span className="font-display font-bold text-white text-sm">Audient AI</span>
+            <span className="font-display font-bold text-white light:text-slate-900 text-sm">Audient AI</span>
             <span className="ml-2 text-xs text-slate-500">Admin Console</span>
           </div>
         </div>
@@ -161,15 +161,15 @@ export default function AdminPage() {
 
         {/* ── Page title ──────────────────────────────── */}
         <div>
-          <h1 className="font-display font-bold text-2xl text-white">Admin Dashboard</h1>
-          <p className="text-slate-400 text-sm mt-1">Manage users and monitor system activity</p>
+          <h1 className="font-display font-bold text-2xl text-white light:text-slate-900">Admin Dashboard</h1>
+          <p className="text-slate-400 light:text-slate-600 text-sm mt-1">Manage users and monitor system activity</p>
         </div>
 
         {/* ── Stats row ───────────────────────────────── */}
         {loading ? (
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             {Array.from({ length: 4 }).map((_, i) => (
-              <div key={i} className="h-24 rounded-2xl bg-white/4 animate-pulse" />
+              <div key={i} className="h-24 rounded-2xl bg-white/4 light:bg-slate-200/60 animate-pulse" />
             ))}
           </div>
         ) : (
@@ -177,7 +177,7 @@ export default function AdminPage() {
             {statCards.map(({ label, value, icon: Icon, color }) => (
               <Card key={label} variant="elevated" className="p-5">
                 <div className={`mb-3 ${color}`}><Icon size={20} /></div>
-                <div className="text-2xl font-bold text-white">{value}</div>
+                <div className="text-2xl font-bold text-white light:text-slate-900">{value}</div>
                 <div className="text-xs text-slate-400 mt-1">{label}</div>
               </Card>
             ))}

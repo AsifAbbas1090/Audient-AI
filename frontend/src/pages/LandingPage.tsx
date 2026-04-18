@@ -82,28 +82,28 @@ const mockLines = [
 // ── Subcomponents ────────────────────────────────────────────
 function Navbar() {
   return (
-    <header className="fixed top-0 inset-x-0 z-50 border-b border-white/6 bg-surface-400/80 backdrop-blur-xl">
+    <header className="fixed top-0 inset-x-0 z-50 border-b border-white/6 bg-surface-400/80 backdrop-blur-xl light:bg-white/90 light:border-slate-200/90">
       <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
         {/* Logo */}
         <Link to="/" className="flex items-center gap-2.5">
           <div className="h-8 w-8 rounded-xl bg-brand-600 flex items-center justify-center shadow-glow">
             <Mic size={15} className="text-white" />
           </div>
-          <span className="font-display font-bold text-white text-sm">Audient AI</span>
+          <span className="font-display font-bold text-white light:text-slate-900 text-sm">Audient AI</span>
         </Link>
 
         {/* Nav links */}
         <nav className="hidden md:flex items-center gap-6 text-sm text-slate-400">
-          <a href="#features"   className="hover:text-white transition-colors">Features</a>
-          <a href="#how"        className="hover:text-white transition-colors">How it works</a>
-          <a href="#usecases"   className="hover:text-white transition-colors">Use cases</a>
+          <a href="#features"   className="hover:text-white light:hover:text-slate-900 transition-colors">Features</a>
+          <a href="#how"        className="hover:text-white light:hover:text-slate-900 transition-colors">How it works</a>
+          <a href="#usecases"   className="hover:text-white light:hover:text-slate-900 transition-colors">Use cases</a>
         </nav>
 
         {/* CTAs */}
         <div className="flex items-center gap-3">
           <Link
             to="/login"
-            className="hidden sm:block text-sm text-slate-400 hover:text-white transition-colors"
+            className="hidden sm:block text-sm text-slate-400 hover:text-white light:hover:text-slate-900 transition-colors"
           >
             Sign in
           </Link>
@@ -129,7 +129,7 @@ function HeroPreview() {
       <div className="absolute inset-x-10 -top-6 h-32 bg-brand-500/20 blur-3xl rounded-full pointer-events-none" />
 
       {/* Card */}
-      <div className="relative rounded-2xl border border-white/10 bg-surface-50/90 backdrop-blur-xl overflow-hidden shadow-glow-lg">
+      <div className="relative rounded-2xl border border-white/10 bg-surface-50/90 backdrop-blur-xl overflow-hidden shadow-glow-lg light:bg-white light:border-slate-200 light:shadow-soft">
         {/* Top bar */}
         <div className="flex items-center gap-2 px-4 py-3 border-b border-white/6 bg-white/3">
           <div className="flex gap-1.5">
@@ -209,7 +209,7 @@ function HeroPreview() {
 // ── Main page ────────────────────────────────────────────────
 export default function LandingPage() {
   return (
-    <div className="min-h-screen bg-surface-400 text-slate-100 overflow-x-hidden">
+    <div className="min-h-screen bg-surface-400 text-slate-100 overflow-x-hidden light:bg-slate-50 light:text-slate-900">
       <Navbar />
 
       {/* ── Hero ──────────────────────────────────────────── */}
@@ -229,7 +229,7 @@ export default function LandingPage() {
           </motion.div>
 
           {/* Headline */}
-          <motion.h1 {...fadeUp(0.1)} className="font-display font-bold text-5xl md:text-6xl lg:text-7xl text-white leading-[1.08] tracking-tight">
+          <motion.h1 {...fadeUp(0.1)} className="font-display font-bold text-5xl md:text-6xl lg:text-7xl text-white light:text-slate-900 leading-[1.08] tracking-tight">
             Drop the pen.{' '}
             <span className="text-gradient">Capture</span>{' '}
             the conversation.
@@ -268,7 +268,7 @@ export default function LandingPage() {
         <div className="max-w-7xl mx-auto">
           <motion.div {...fadeUp()} className="text-center mb-14">
             <p className="text-xs font-semibold text-brand-400 uppercase tracking-widest mb-3">Features</p>
-            <h2 className="font-display font-bold text-3xl md:text-4xl text-white">
+            <h2 className="font-display font-bold text-3xl md:text-4xl text-white light:text-slate-900">
               Everything in one pipeline
             </h2>
             <p className="mt-3 text-slate-400 max-w-lg mx-auto">
@@ -283,7 +283,7 @@ export default function LandingPage() {
                   <div className={`h-11 w-11 rounded-xl border flex items-center justify-center mb-5 ${f.bg}`}>
                     <f.icon size={20} className={f.color} />
                   </div>
-                  <h3 className="font-semibold text-white text-sm mb-2">{f.title}</h3>
+                  <h3 className="font-semibold text-white light:text-slate-900 text-sm mb-2">{f.title}</h3>
                   <p className="text-sm text-slate-400 leading-relaxed">{f.desc}</p>
                 </div>
               </motion.div>
@@ -297,7 +297,7 @@ export default function LandingPage() {
         <div className="max-w-5xl mx-auto">
           <motion.div {...fadeUp()} className="text-center mb-14">
             <p className="text-xs font-semibold text-brand-400 uppercase tracking-widest mb-3">How it works</p>
-            <h2 className="font-display font-bold text-3xl md:text-4xl text-white">
+            <h2 className="font-display font-bold text-3xl md:text-4xl text-white light:text-slate-900">
               Three steps, zero friction
             </h2>
           </motion.div>
@@ -311,7 +311,7 @@ export default function LandingPage() {
                 <div className="inline-flex h-16 w-16 rounded-2xl items-center justify-center bg-brand-600/20 border border-brand-500/30 mb-5 mx-auto">
                   <span className="font-display font-bold text-xl text-brand-400">{s.num}</span>
                 </div>
-                <h3 className="font-semibold text-white mb-2">{s.title}</h3>
+                <h3 className="font-semibold text-white light:text-slate-900 mb-2">{s.title}</h3>
                 <p className="text-sm text-slate-400 leading-relaxed max-w-xs mx-auto">{s.desc}</p>
               </motion.div>
             ))}
@@ -324,7 +324,7 @@ export default function LandingPage() {
         <div className="max-w-7xl mx-auto">
           <motion.div {...fadeUp()} className="text-center mb-14">
             <p className="text-xs font-semibold text-brand-400 uppercase tracking-widest mb-3">Use cases</p>
-            <h2 className="font-display font-bold text-3xl md:text-4xl text-white">
+            <h2 className="font-display font-bold text-3xl md:text-4xl text-white light:text-slate-900">
               Built for two-person conversations
             </h2>
             <p className="mt-3 text-slate-400 max-w-lg mx-auto">
@@ -339,7 +339,7 @@ export default function LandingPage() {
                   <div className="h-12 w-12 rounded-xl bg-brand-500/10 border border-brand-500/20 flex items-center justify-center mb-5 group-hover:bg-brand-500/15 transition-colors">
                     <u.icon size={22} className="text-brand-400" />
                   </div>
-                  <h3 className="font-semibold text-white mb-2">{u.title}</h3>
+                  <h3 className="font-semibold text-white light:text-slate-900 mb-2">{u.title}</h3>
                   <p className="text-sm text-slate-400 leading-relaxed">{u.desc}</p>
                 </div>
               </motion.div>
@@ -365,7 +365,7 @@ export default function LandingPage() {
                 No internet required after setup
               </span>
 
-              <h2 className="font-display font-bold text-3xl md:text-4xl text-white mb-4 leading-tight">
+              <h2 className="font-display font-bold text-3xl md:text-4xl text-white light:text-slate-900 mb-4 leading-tight">
                 Ready to transcribe your first session?
               </h2>
               <p className="text-slate-400 mb-8 max-w-md mx-auto">
@@ -400,7 +400,7 @@ export default function LandingPage() {
             <div className="h-7 w-7 rounded-lg bg-brand-600 flex items-center justify-center">
               <Mic size={13} className="text-white" />
             </div>
-            <span className="font-display font-bold text-sm text-white">Audient AI</span>
+            <span className="font-display font-bold text-sm text-white light:text-slate-900">Audient AI</span>
           </div>
 
           <div className="flex items-center gap-6 text-sm text-slate-500">

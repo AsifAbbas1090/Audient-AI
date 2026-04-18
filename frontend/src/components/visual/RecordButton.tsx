@@ -45,7 +45,7 @@ export function RecordButton({ state, onClick, className, size = 'lg' }: RecordB
           disabled={state === 'processing'}
           className={cn(
             'relative z-10 rounded-full flex items-center justify-center',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-4 focus-visible:ring-offset-[#0a0a0f]',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-4 focus-visible:ring-offset-[#0a0a0f] light:focus-visible:ring-offset-slate-100',
             'disabled:opacity-50 disabled:cursor-not-allowed',
             'transition-all duration-200 active:scale-95',
             btnSize,

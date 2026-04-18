@@ -33,16 +33,16 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: (id: number)
     <div
       className={cn(
         'flex items-center gap-3 px-4 py-3 rounded-xl',
-        'bg-surface-50 border shadow-glow-lg',
+        'bg-surface-50 border shadow-glow-lg light:bg-white light:shadow-xl light:border-slate-200/90',
         'animate-slide-up',
         borders[toast.type]
       )}
     >
       {icons[toast.type]}
-      <span className="text-sm text-slate-200 flex-1">{toast.message}</span>
+      <span className="text-sm text-slate-200 light:text-slate-800 flex-1">{toast.message}</span>
       <button
         onClick={() => onDismiss(toast.id)}
-        className="text-slate-500 hover:text-slate-300 ml-1"
+        className="text-slate-500 hover:text-slate-300 light:hover:text-slate-600 ml-1"
       >
         <X size={14} />
       </button>

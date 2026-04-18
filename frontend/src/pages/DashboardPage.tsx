@@ -73,11 +73,13 @@ function SessionCard({ conv, index }: { conv: Conv; index: number }) {
           'rounded-2xl border p-5 h-full',
           'bg-white/3 border-white/8',
           'hover:bg-white/6 hover:border-brand-500/25 hover:shadow-glow',
+          'light:bg-white light:border-slate-200 light:shadow-soft',
+          'light:hover:bg-slate-50 light:hover:border-brand-400/35',
           'transition-all duration-200',
         )}>
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
-              <h3 className="font-semibold text-white text-sm truncate group-hover:text-brand-300 transition-colors">
+              <h3 className="font-semibold text-white light:text-slate-900 text-sm truncate group-hover:text-brand-300 light:group-hover:text-brand-700 transition-colors">
                 {conv.title || 'Untitled session'}
               </h3>
               <div className="flex items-center gap-2 mt-0.5 flex-wrap">
@@ -98,7 +100,7 @@ function SessionCard({ conv, index }: { conv: Conv; index: number }) {
             <div className="shrink-0">{cfg.badge}</div>
           </div>
 
-          <p className="text-sm text-slate-400 mt-3 leading-relaxed line-clamp-2 min-h-[40px]">
+          <p className="text-sm text-slate-400 light:text-slate-600 mt-3 leading-relaxed line-clamp-2 min-h-[40px]">
             {conv.status === 'failed'
               ? 'Transcription failed. Please re-record the session.'
               : conv.language
@@ -107,7 +109,7 @@ function SessionCard({ conv, index }: { conv: Conv; index: number }) {
           </p>
 
           <div className="flex items-center justify-between mt-4">
-            <div className="flex items-center gap-3 text-xs text-slate-500">
+            <div className="flex items-center gap-3 text-xs text-slate-500 light:text-slate-600">
               <span className="flex items-center gap-1">
                 <Clock size={11} />
                 {formatDuration(conv.duration)}
@@ -138,15 +140,15 @@ function EmptyState({ query, specialtyHint }: { query: string; specialtyHint: st
       animate={{ opacity: 1 }}
       className="col-span-2 flex flex-col items-center justify-center py-24 text-center"
     >
-      <div className="h-16 w-16 rounded-2xl bg-white/4 border border-white/8 flex items-center justify-center mb-4">
+      <div className="h-16 w-16 rounded-2xl bg-white/4 border border-white/8 light:bg-slate-100 light:border-slate-200 flex items-center justify-center mb-4">
         {query
           ? <Search size={24} className="text-slate-500" />
           : <FileText size={24} className="text-slate-500" />}
       </div>
-      <h3 className="font-semibold text-white mb-1">
+      <h3 className="font-semibold text-white light:text-slate-900 mb-1">
         {query ? 'No sessions found' : 'No sessions yet'}
       </h3>
-      <p className="text-sm text-slate-500 max-w-xs">
+      <p className="text-sm text-slate-500 light:text-slate-600 max-w-xs">
         {query
           ? `No results for "${query}". Try a different keyword.`
           : specialtyHint}
@@ -175,6 +177,7 @@ function SpecialtyFocusPanel({ specUi }: { specUi: ReturnType<typeof getSpecialt
       className={cn(
         'rounded-2xl border p-5 mb-8',
         accent.bg, accent.border,
+        'light:bg-white/90 light:border-slate-200',
       )}
     >
       <div className="flex items-center gap-2 mb-3">
@@ -187,7 +190,7 @@ function SpecialtyFocusPanel({ specUi }: { specUi: ReturnType<typeof getSpecialt
         {focusAreas.map(area => (
           <div key={area} className="flex items-start gap-2">
             <CheckCircle2 size={12} className={cn('mt-0.5 shrink-0', accent.text)} />
-            <span className="text-xs text-slate-300 leading-relaxed">{area}</span>
+            <span className="text-xs text-slate-300 light:text-slate-700 leading-relaxed">{area}</span>
           </div>
         ))}
       </div>
@@ -245,17 +248,17 @@ export default function DashboardPage() {
   }[specUi.code] ?? 'Total Sessions'
 
   return (
-    <div className="min-h-screen flex bg-surface-400">
+    <div className="app-page">
       <Sidebar />
 
-      <main className="flex-1 overflow-y-auto">
+      <main className="flex-1 overflow-y-auto light:bg-slate-100">
         <div className="max-w-6xl mx-auto px-6 py-8">
 
           {/* ── Page header ──────────────────────────────── */}
           <div className="flex items-start justify-between mb-8">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2 gap-y-1">
-                <h1 className="font-display font-bold text-2xl text-white">
+                <h1 className="font-display font-bold text-2xl text-white light:text-slate-900">
                   {user ? `Welcome, ${user.name.split(' ')[0]}` : 'Sessions'}
                 </h1>
                 {user && (
@@ -267,13 +270,13 @@ export default function DashboardPage() {
                   </span>
                 )}
               </div>
-              <p className="text-sm text-slate-400 mt-1">
+              <p className="text-sm text-slate-400 light:text-slate-600 mt-1">
                 {loading
                   ? 'Loading your sessions…'
                   : `${completed.length} of ${convs.length} sessions completed`}
               </p>
               {user && (
-                <p className="text-xs text-slate-500 mt-2 max-w-xl leading-relaxed">
+                <p className="text-xs text-slate-500 light:text-slate-600 mt-2 max-w-xl leading-relaxed">
                   {specUi.tagline}
                 </p>
               )}
@@ -281,7 +284,7 @@ export default function DashboardPage() {
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setRefreshKey(k => k + 1)}
-                className="p-2 rounded-xl text-slate-500 hover:text-slate-300 hover:bg-white/5 transition-colors"
+                className="p-2 rounded-xl text-slate-500 hover:text-slate-300 hover:bg-white/5 light:hover:bg-slate-200/80 light:text-slate-600 light:hover:text-slate-900 transition-colors"
                 title="Refresh"
               >
                 <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
@@ -338,7 +341,7 @@ export default function DashboardPage() {
                 initial={{ opacity: 0, y: -8 }}
                 animate={{ opacity: 1, y: 0  }}
                 exit={{ opacity: 0 }}
-                className="flex items-center gap-3 p-4 mb-6 rounded-xl bg-red-500/10 border border-red-500/20 text-sm text-red-400"
+                className="flex items-center gap-3 p-4 mb-6 rounded-xl bg-red-500/10 border border-red-500/20 text-sm text-red-400 light:bg-red-50 light:border-red-200 light:text-red-700"
               >
                 <AlertCircle size={15} />
                 {error}
@@ -356,16 +359,13 @@ export default function DashboardPage() {
                 value={query}
                 onChange={e => setQuery(e.target.value)}
                 className={cn(
-                  'h-10 w-full rounded-xl pl-9 pr-4 text-sm',
-                  'bg-white/5 border border-white/10',
-                  'text-slate-100 placeholder:text-slate-500',
-                  'focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent',
+                  'h-10 w-full rounded-xl pl-9 pr-4 text-sm app-input-native',
                   'transition-all duration-200',
                 )}
               />
             </div>
 
-            <div className="flex items-center gap-1 bg-white/4 border border-white/8 rounded-xl p-1">
+            <div className="flex items-center gap-1 bg-white/4 border border-white/8 rounded-xl p-1 light:bg-slate-100 light:border-slate-200">
               {(['all', 'complete', 'approved', 'processing', 'failed'] as StatusFilter[]).map(f => (
                 <button
                   key={f}
@@ -374,7 +374,7 @@ export default function DashboardPage() {
                     'h-8 px-3 rounded-lg text-xs font-medium capitalize transition-all duration-150',
                     statusFilter === f
                       ? 'bg-brand-600 text-white shadow-glow'
-                      : 'text-slate-400 hover:text-slate-200 hover:bg-white/5',
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-white/5 light:text-slate-600 light:hover:text-slate-900 light:hover:bg-slate-200/80',
                   )}
                 >
                   {f}
@@ -385,7 +385,7 @@ export default function DashboardPage() {
 
           {/* ── Results label ────────────────────────────── */}
           {(query || statusFilter !== 'all') && !loading && filtered.length > 0 && (
-            <p className="text-xs text-slate-500 mb-4">
+            <p className="text-xs text-slate-500 light:text-slate-600 mb-4">
               {filtered.length} session{filtered.length !== 1 ? 's' : ''} found
             </p>
           )}

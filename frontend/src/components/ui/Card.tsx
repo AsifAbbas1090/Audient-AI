@@ -27,7 +27,8 @@ export function Card({ variant = 'default', hover = false, className, ...props }
       className={cn(
         'rounded-2xl theme-transition',
         variants[variant],
-        hover && 'hover:border-brand-500/30 hover:shadow-glow cursor-pointer transition-all duration-200',
+        lightVariants[variant],
+        hover && 'hover:border-brand-500/30 hover:shadow-glow cursor-pointer transition-all duration-200 light:hover:border-brand-400/40 light:hover:shadow-soft',
         className
       )}
       {...props}
@@ -44,9 +45,9 @@ export function CardContent({ className, ...props }: React.HTMLAttributes<HTMLDi
 }
 
 export function CardTitle({ className, ...props }: React.HTMLAttributes<HTMLHeadingElement>) {
-  return <h3 className={cn('text-base font-semibold text-white', className)} {...props} />
+  return <h3 className={cn('text-base font-semibold text-white light:text-slate-900', className)} {...props} />
 }
 
 export function CardDescription({ className, ...props }: React.HTMLAttributes<HTMLParagraphElement>) {
-  return <p className={cn('text-sm text-slate-400 mt-1', className)} {...props} />
+  return <p className={cn('text-sm text-slate-400 light:text-slate-600 mt-1', className)} {...props} />
 }

@@ -8,12 +8,12 @@ type BadgeProps = React.HTMLAttributes<HTMLSpanElement> & {
 }
 
 const variants: Record<BadgeVariant, string> = {
-  default:    'bg-slate-800 text-slate-300 border-slate-700',
-  success:    'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
-  warning:    'bg-amber-500/10 text-amber-400 border-amber-500/20',
-  error:      'bg-red-500/10 text-red-400 border-red-500/20',
-  offline:    'bg-slate-500/10 text-slate-400 border-slate-500/20',
-  processing: 'bg-brand-500/10 text-brand-400 border-brand-500/20',
+  default:    'bg-slate-800 text-slate-300 border-slate-700 light:bg-slate-200 light:text-slate-800 light:border-slate-300',
+  success:    'bg-emerald-500/10 text-emerald-400 border-emerald-500/20 light:bg-emerald-500/15 light:text-emerald-700 light:border-emerald-500/30',
+  warning:    'bg-amber-500/10 text-amber-400 border-amber-500/20 light:bg-amber-500/15 light:text-amber-800 light:border-amber-500/30',
+  error:      'bg-red-500/10 text-red-400 border-red-500/20 light:bg-red-500/10 light:text-red-700 light:border-red-500/25',
+  offline:    'bg-slate-500/10 text-slate-400 border-slate-500/20 light:bg-slate-200 light:text-slate-600 light:border-slate-300',
+  processing: 'bg-brand-500/10 text-brand-400 border-brand-500/20 light:bg-brand-500/15 light:text-brand-700 light:border-brand-500/25',
 }
 
 const dotColors: Record<BadgeVariant, string> = {

@@ -4,8 +4,12 @@
 
 /* ── Base ───────────────────────────────────────────────────── */
 @layer base {
-  :root {
+  html.dark {
     color-scheme: dark;
+  }
+
+  html.light {
+    color-scheme: light;
   }
 
   html {
@@ -40,6 +44,11 @@
     color: #e0e7ff; /* brand-100 */
   }
 
+  html.light ::selection {
+    background-color: rgba(99, 102, 241, 0.25);
+    color: #1e1b4b;
+  }
+
   /* Focus ring — raw values to avoid @apply custom-class issue */
   :focus-visible {
     outline: none;
@@ -68,6 +77,10 @@
   .bg-grid {
     background-image: radial-gradient(circle, rgba(99,102,241,0.18) 1px, transparent 1px);
     background-size: 24px 24px;
+  }
+
+  html.light .bg-grid {
+    background-image: radial-gradient(circle, rgba(99,102,241,0.12) 1px, transparent 1px);
   }
 
   /* Animated gradient text */
@@ -124,6 +137,10 @@
     pointer-events: none;
   }
 
+  html.light .bg-glow-radial {
+    opacity: 0.45;
+  }
+
   /* Gradient border via pseudo-element */
   .border-gradient {
     position: relative;
@@ -146,5 +163,31 @@
   /* Per-component theme transitions (replaces broad * transition) */
   .theme-transition {
     transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+  }
+
+  /* Shared app surfaces — `light:` cannot be used inside @apply; use html.light (see tailwind.config.js plugin for components) */
+  .app-page {
+    @apply min-h-screen flex bg-surface-400;
+  }
+
+  html.light .app-page {
+    @apply bg-slate-100;
+  }
+
+  .app-surface-elevated {
+    @apply bg-white/3 border border-white/8;
+  }
+
+  html.light .app-surface-elevated {
+    @apply bg-white border-slate-200/90;
+  }
+
+  .app-input-native {
+    @apply bg-white/5 border border-white/10 text-slate-100 placeholder:text-slate-500;
+    @apply focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent;
+  }
+
+  html.light .app-input-native {
+    @apply bg-white border-slate-200 text-slate-900 placeholder:text-slate-400;
   }
 }

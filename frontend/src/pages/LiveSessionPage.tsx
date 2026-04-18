@@ -41,18 +41,18 @@ const PROGRESS_STEPS = [
 function ProcessingOverlay({ step }: { step: number }) {
   const current = PROGRESS_STEPS[Math.min(step, PROGRESS_STEPS.length - 1)]
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-surface-400/90 backdrop-blur-sm">
-      <div className="w-full max-w-sm mx-4 bg-white/5 border border-white/10 rounded-2xl p-8 text-center shadow-2xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-surface-400/90 light:bg-slate-900/40 backdrop-blur-sm">
+      <div className="w-full max-w-sm mx-4 bg-white/5 border border-white/10 light:bg-white light:border-slate-200 rounded-2xl p-8 text-center shadow-2xl">
         <Loader2 size={40} className="mx-auto text-brand-400 animate-spin mb-5" />
-        <h2 className="text-white font-semibold text-lg mb-1">Processing Session</h2>
-        <p className="text-slate-400 text-sm mb-6">{current.label}</p>
-        <div className="h-1.5 w-full bg-white/10 rounded-full overflow-hidden">
+        <h2 className="text-white light:text-slate-900 font-semibold text-lg mb-1">Processing Session</h2>
+        <p className="text-slate-400 light:text-slate-600 text-sm mb-6">{current.label}</p>
+        <div className="h-1.5 w-full bg-white/10 light:bg-slate-200 rounded-full overflow-hidden">
           <div
             className="h-full bg-brand-500 rounded-full transition-all duration-700"
             style={{ width: `${current.pct}%` }}
           />
         </div>
-        <p className="text-xs text-slate-600 mt-3">
+        <p className="text-xs text-slate-600 light:text-slate-500 mt-3">
           AI is diarizing speakers and extracting clinical fields…
         </p>
       </div>
@@ -76,7 +76,7 @@ function DeviceSelect({
         <select
           value={value}
           onChange={e => onChange(e.target.value)}
-          className="w-full appearance-none bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs text-slate-200 pr-7 focus:outline-none focus:border-brand-500/50"
+          className="w-full appearance-none bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs text-slate-200 pr-7 focus:outline-none focus:border-brand-500/50 light:bg-white light:border-slate-200 light:text-slate-900"
         >
           <option value="">{placeholder}</option>
           {devices.map(d => (
@@ -385,7 +385,7 @@ export default function LiveSessionPage() {
 
   // ── Render ───────────────────────────────────────────────────────────────────
   return (
-    <div className="min-h-screen flex bg-surface-400">
+    <div className="app-page">
       <Sidebar />
       {saving && <ProcessingOverlay step={progressStep} />}
 
@@ -397,7 +397,7 @@ export default function LiveSessionPage() {
         supported={vocalSupported}
       />
 
-      <main className="flex-1 overflow-hidden flex flex-col">
+      <main className="flex-1 overflow-hidden flex flex-col light:bg-slate-100">
 
         {/* ── Continuation banner ─────────────────────────────────────────── */}
         {continueSessionId && (

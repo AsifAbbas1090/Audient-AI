@@ -196,7 +196,7 @@ export default function ASRPage() {
   const hasResult = segments.length > 0 || rawText
 
   return (
-    <div className="min-h-screen flex bg-surface-400">
+     <div className="app-page">
       <Sidebar />
 
       <main className="flex-1 flex flex-col overflow-hidden">

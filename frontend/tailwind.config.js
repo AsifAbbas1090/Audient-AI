@@ -135,5 +135,10 @@ export default {
       },
     },
   },
-  plugins: [],
+  plugins: [
+    /** When `html` has class `light`, utilities like `light:bg-white` apply (see ThemeProvider + main.tsx). */
+    function lightVariantPlugin({ addVariant }) {
+      addVariant('light', '.light &')
+    },
+  ],
 }

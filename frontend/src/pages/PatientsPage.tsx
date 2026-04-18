@@ -54,22 +54,17 @@ export default function PatientsPage() {
   }, [query, load])
 
   return (
-    <div className="min-h-screen flex bg-surface-400">
+    <div className={cn('app-page')}>
       <Sidebar />
 
-      <main className="flex-1 overflow-y-auto">
+      <main className="flex-1 overflow-y-auto light:bg-slate-100">
         <div className="max-w-4xl mx-auto px-6 py-8">
 
           {/* ── Header ───────────────────────────────────── */}
-          <div className="flex items-center justify-between mb-8">
-            <div>
-              <h1 className="font-display font-bold text-2xl text-white">Patients</h1>
-              <p className="text-sm text-slate-400 mt-1">
-                {loading ? 'Loading…' : `${patients.length} patient thread${patients.length !== 1 ? 's' : ''}`}
-              </p>
-            </div>
-            <p className="text-xs text-slate-500 max-w-xs text-right leading-relaxed">
-              Create patient threads from any session's Patient card. Each patient gets a unique PAT code.
+          <div className="mb-8">
+            <h1 className="font-display font-bold text-2xl text-white light:text-slate-900">Patients</h1>
+            <p className="text-sm text-slate-400 light:text-slate-600 mt-1">
+              {loading ? 'Loading…' : `${patients.length} patient thread${patients.length !== 1 ? 's' : ''}`}
             </p>
           </div>
 
@@ -82,17 +77,14 @@ export default function PatientsPage() {
               value={query}
               onChange={e => setQuery(e.target.value)}
               className={cn(
-                'h-10 w-full rounded-xl pl-9 pr-4 text-sm',
-                'bg-white/5 border border-white/10',
-                'text-slate-100 placeholder:text-slate-500',
-                'focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent',
+                'h-10 w-full rounded-xl pl-9 pr-4 text-sm app-input-native',
               )}
             />
           </div>
 
           {/* ── Error ────────────────────────────────────── */}
           {error && (
-            <div className="flex items-center gap-3 p-4 mb-6 rounded-xl bg-red-500/10 border border-red-500/20 text-sm text-red-400">
+            <div className="flex items-center gap-3 p-4 mb-6 rounded-xl bg-red-500/10 border border-red-500/20 text-sm text-red-400 light:bg-red-50 light:border-red-200 light:text-red-700">
               <AlertCircle size={15} />
               {error}
             </div>
@@ -102,21 +94,19 @@ export default function PatientsPage() {
           {loading ? (
             <div className="space-y-3">
               {Array.from({ length: 5 }).map((_, i) => (
-                <div key={i} className="h-16 rounded-2xl bg-white/4 animate-pulse" />
+                <div key={i} className="h-16 rounded-2xl bg-white/4 light:bg-slate-200/60 animate-pulse" />
               ))}
             </div>
           ) : patients.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-24 text-center">
-              <div className="h-16 w-16 rounded-2xl bg-white/4 border border-white/8 flex items-center justify-center mb-4">
+              <div className="h-16 w-16 rounded-2xl bg-white/4 border border-white/8 light:bg-slate-100 light:border-slate-200 flex items-center justify-center mb-4">
                 {query ? <Search size={24} className="text-slate-500" /> : <User size={24} className="text-slate-500" />}
               </div>
-              <h3 className="font-semibold text-white mb-1">
+              <h3 className="font-semibold text-white light:text-slate-900 mb-1">
                 {query ? 'No patients found' : 'No patient threads yet'}
               </h3>
-              <p className="text-sm text-slate-500 max-w-xs">
-                {query
-                  ? `No results for "${query}".`
-                  : 'Open any session, scroll to the Patient card, and link or create a patient to start a thread.'}
+              <p className="text-sm text-slate-500 light:text-slate-600 max-w-xs">
+                {query ? `No results for "${query}".` : 'Threads you create will appear here.'}
               </p>
             </div>
           ) : (
@@ -133,6 +123,8 @@ export default function PatientsPage() {
                       'flex items-center gap-4 rounded-2xl border px-5 py-4',
                       'bg-white/3 border-white/8',
                       'hover:bg-white/6 hover:border-brand-500/25 hover:shadow-glow',
+                      'light:bg-white light:border-slate-200 light:shadow-soft',
+                      'light:hover:bg-slate-50 light:hover:border-brand-400/35',
                       'transition-all duration-200',
                     )}>
                       {/* Avatar */}
@@ -143,7 +135,7 @@ export default function PatientsPage() {
                       {/* Name + meta */}
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-sm font-semibold text-white group-hover:text-brand-300 transition-colors truncate">
+                          <span className="text-sm font-semibold text-white light:text-slate-900 group-hover:text-brand-300 light:group-hover:text-brand-700 transition-colors truncate">
                             {p.name}
                           </span>
                           {p.patient_code && (
@@ -153,14 +145,14 @@ export default function PatientsPage() {
                             </span>
                           )}
                         </div>
-                        <div className="flex items-center gap-3 mt-0.5 text-xs text-slate-500">
+                        <div className="flex items-center gap-3 mt-0.5 text-xs text-slate-500 light:text-slate-600">
                           {p.age && <span>{p.age}</span>}
                           {p.gender && <span>{p.gender}</span>}
                         </div>
                       </div>
 
                       {/* Stats */}
-                      <div className="flex items-center gap-5 shrink-0 text-xs text-slate-400">
+                      <div className="flex items-center gap-5 shrink-0 text-xs text-slate-400 light:text-slate-600">
                         <div className="flex items-center gap-1.5 text-right">
                           <FileText size={11} className="text-slate-600" />
                           <span>{p.session_count} session{p.session_count !== 1 ? 's' : ''}</span>

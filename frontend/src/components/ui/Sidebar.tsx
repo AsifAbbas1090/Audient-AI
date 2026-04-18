@@ -112,16 +112,16 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="h-screen sticky top-0 w-64 flex flex-col border-r border-white/8 bg-surface-100/80 backdrop-blur-xl shrink-0">
+    <aside className="h-screen sticky top-0 w-64 flex flex-col border-r border-white/8 bg-surface-100/80 backdrop-blur-xl shrink-0 light:bg-white/95 light:border-slate-200/90 light:shadow-[1px_0_0_rgba(0,0,0,0.04)]">
 
       {/* Logo + notifications */}
-      <div className="flex items-center gap-2 px-4 py-5 border-b border-white/6 overflow-visible">
+      <div className="flex items-center gap-2 px-4 py-5 border-b border-white/6 overflow-visible light:border-slate-200/80">
         <div className="h-8 w-8 rounded-xl bg-brand-600 flex items-center justify-center shadow-glow shrink-0">
           <Mic size={15} className="text-white" />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="font-display font-bold text-sm text-white leading-none">Audient AI</div>
-          <div className="text-[10px] text-slate-500 mt-0.5 truncate">Medical Transcription</div>
+          <div className="font-display font-bold text-sm text-white light:text-slate-900 leading-none">Audient AI</div>
+          <div className="text-[10px] text-slate-500 light:text-slate-500 mt-0.5 truncate">Medical Transcription</div>
           {user && (
             <div className="text-[10px] text-brand-400/90 mt-0.5 font-medium truncate" title={specUi.tagline}>
               {specUi.label}
@@ -134,7 +134,7 @@ export function Sidebar() {
             <button
               type="button"
               onClick={() => setNotifOpen(o => !o)}
-              className="relative p-2 rounded-xl text-slate-400 hover:text-white hover:bg-white/8 transition-colors"
+              className="relative p-2 rounded-xl text-slate-400 hover:text-white hover:bg-white/8 light:text-slate-500 light:hover:text-slate-900 light:hover:bg-slate-100 transition-colors"
               aria-label="Notifications"
             >
               <Bell size={18} />
@@ -152,10 +152,11 @@ export function Sidebar() {
                   'w-[min(20rem,calc(100vw-1rem))] max-w-[calc(100vw-1rem)]',
                   'max-h-[min(65vh,24rem)] overflow-hidden flex flex-col',
                   'rounded-xl border border-white/10 bg-surface-200 shadow-2xl',
+                  'light:border-slate-200 light:bg-white light:shadow-xl',
                 )}
               >
-                <div className="flex items-center justify-between px-3 py-2 border-b border-white/8">
-                  <span className="text-xs font-semibold text-slate-300">Notifications</span>
+                <div className="flex items-center justify-between px-3 py-2 border-b border-white/8 light:border-slate-200">
+                  <span className="text-xs font-semibold text-slate-300 light:text-slate-800">Notifications</span>
                   {unreadNotifs > 0 && (
                     <button
                       type="button"
@@ -176,11 +177,11 @@ export function Sidebar() {
                 </div>
                 <div className="overflow-y-auto flex-1 py-1">
                   {notifications.length === 0 ? (
-                    <p className="text-xs text-slate-500 text-center py-8 px-3">No notifications yet.</p>
+                    <p className="text-xs text-slate-500 light:text-slate-600 text-center py-8 px-3">No notifications yet.</p>
                   ) : (
                     Object.entries(grouped).map(([label, items]) => (
                       <div key={label} className="mb-2 last:mb-0">
-                        <div className="px-3 py-1 text-[10px] font-medium uppercase tracking-wide text-slate-500">{label}</div>
+                        <div className="px-3 py-1 text-[10px] font-medium uppercase tracking-wide text-slate-500 light:text-slate-500">{label}</div>
                         <ul className="space-y-0.5">
                           {items.map(n => {
                             const p = n.payload_json
@@ -205,11 +206,13 @@ export function Sidebar() {
                                   onClick={() => handleNotifClick(n)}
                                   className={cn(
                                     'w-full text-left px-3 py-2 text-xs transition-colors rounded-lg mx-1',
-                                    n.read_at ? 'text-slate-500 hover:bg-white/5' : 'text-slate-200 bg-white/6 hover:bg-white/10',
+                                    n.read_at
+                                      ? 'text-slate-500 hover:bg-white/5 light:text-slate-600 light:hover:bg-slate-100'
+                                      : 'text-slate-200 bg-white/6 hover:bg-white/10 light:text-slate-900 light:bg-brand-50/80 light:hover:bg-brand-50',
                                   )}
                                 >
                                   <div className="font-medium line-clamp-2">{title}</div>
-                                  {sub && <div className="text-[10px] text-slate-500 mt-0.5 truncate">{sub}</div>}
+                                  {sub && <div className="text-[10px] text-slate-500 light:text-slate-500 mt-0.5 truncate">{sub}</div>}
                                 </button>
                               </li>
                             )
@@ -235,13 +238,13 @@ export function Sidebar() {
             className={({ isActive }) => cn(
               'group flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium theme-transition',
               isActive
-                ? 'bg-brand-600/20 text-brand-300 border border-brand-500/20'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+                ? 'bg-brand-600/20 text-brand-300 border border-brand-500/20 light:bg-brand-500/15 light:text-brand-700 light:border-brand-500/25'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-white/5 light:text-slate-600 light:hover:text-slate-900 light:hover:bg-slate-100'
             )}
           >
             {({ isActive }) => (
               <>
-                <Icon size={16} className={isActive ? 'text-brand-400' : 'text-slate-500 group-hover:text-slate-300'} />
+                <Icon size={16} className={isActive ? 'text-brand-400 light:text-brand-600' : 'text-slate-500 group-hover:text-slate-300 light:group-hover:text-slate-700'} />
                 {label}
                 {to === '/consults' && pendingConsults > 0 && !isActive && (
                   <span className="ml-auto h-4 min-w-4 rounded-full bg-brand-600 text-white text-[9px] font-bold flex items-center justify-center px-1">
@@ -261,13 +264,13 @@ export function Sidebar() {
             className={({ isActive }) => cn(
               'group flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium theme-transition mt-2',
               isActive
-                ? 'bg-violet-600/20 text-violet-300 border border-violet-500/20'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+                ? 'bg-violet-600/20 text-violet-300 border border-violet-500/20 light:bg-violet-500/15 light:text-violet-800 light:border-violet-500/25'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-white/5 light:text-slate-600 light:hover:text-slate-900 light:hover:bg-slate-100'
             )}
           >
             {({ isActive }) => (
               <>
-                <ShieldCheck size={16} className={isActive ? 'text-violet-400' : 'text-slate-500 group-hover:text-slate-300'} />
+                <ShieldCheck size={16} className={isActive ? 'text-violet-400 light:text-violet-600' : 'text-slate-500 group-hover:text-slate-300 light:group-hover:text-slate-700'} />
                 Admin Console
                 {isActive && <span className="ml-auto h-1.5 w-1.5 rounded-full bg-violet-400" />}
               </>
@@ -277,7 +280,7 @@ export function Sidebar() {
       </nav>
 
       {/* Bottom actions */}
-      <div className="px-3 pb-4 space-y-1 border-t border-white/6 pt-4">
+      <div className="px-3 pb-4 space-y-1 border-t border-white/6 pt-4 light:border-slate-200/80">
         {/* User pill */}
         {user && (
           <div className="flex items-center gap-2 px-2 py-2 mb-2">
@@ -285,8 +288,8 @@ export function Sidebar() {
               <span className="text-xs font-bold text-brand-400">{user.name.charAt(0).toUpperCase()}</span>
             </div>
             <div className="flex-1 min-w-0">
-              <div className="text-xs font-medium text-slate-300 truncate">{user.name}</div>
-              <div className="text-[10px] text-slate-500 truncate">
+              <div className="text-xs font-medium text-slate-300 light:text-slate-800 truncate">{user.name}</div>
+              <div className="text-[10px] text-slate-500 light:text-slate-500 truncate">
                 {user.role === 'admin' ? <span className="capitalize">{user.role}</span> : specUi.label}
               </div>
             </div>
@@ -295,7 +298,7 @@ export function Sidebar() {
 
         <NavLink
           to="/live"
-          className="flex items-center justify-center gap-2 w-full h-10 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-sm font-medium shadow-glow theme-transition"
+          className="flex items-center justify-center gap-2 w-full h-10 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-sm font-medium shadow-glow light:shadow-soft theme-transition"
         >
           <Mic size={14} />
           New Session
@@ -304,14 +307,14 @@ export function Sidebar() {
         <div className="flex gap-1 mt-2">
           <button
             onClick={toggle}
-            className="flex-1 flex items-center justify-center gap-2 h-9 rounded-xl text-sm text-slate-400 hover:text-slate-200 hover:bg-white/5 theme-transition"
+            className="flex-1 flex items-center justify-center gap-2 h-9 rounded-xl text-sm text-slate-400 hover:text-slate-200 hover:bg-white/5 light:text-slate-600 light:hover:text-slate-900 light:hover:bg-slate-100 theme-transition"
           >
             {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
             {theme === 'dark' ? 'Light' : 'Dark'}
           </button>
           <button
             onClick={handleLogout}
-            className="flex-1 flex items-center justify-center gap-2 h-9 rounded-xl text-sm text-slate-400 hover:text-red-400 hover:bg-red-500/5 theme-transition"
+            className="flex-1 flex items-center justify-center gap-2 h-9 rounded-xl text-sm text-slate-400 hover:text-red-400 hover:bg-red-500/5 light:text-slate-600 light:hover:text-red-600 light:hover:bg-red-50 theme-transition"
           >
             <LogOut size={14} />
             Sign out

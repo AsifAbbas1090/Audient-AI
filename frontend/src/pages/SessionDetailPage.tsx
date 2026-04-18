@@ -584,9 +584,9 @@ export default function SessionDetailPage() {
   // ── Loading — shell only; global overlay handles spinner (axios GET /conversations/:id)
   if (loading) {
     return (
-      <div className="min-h-screen flex bg-surface-400">
+      <div className="app-page">
         <Sidebar />
-        <main className="flex-1 bg-surface-400" aria-busy />
+        <main className="flex-1 bg-surface-400 light:bg-slate-100" aria-busy />
       </div>
     )
   }
@@ -594,12 +594,12 @@ export default function SessionDetailPage() {
   // ── Error ─────────────────────────────────────────────────
   if (error || !conv) {
     return (
-      <div className="min-h-screen flex bg-surface-400">
+      <div className="app-page">
         <Sidebar />
         <main className="flex-1 flex items-center justify-center">
           <div className="text-center">
             <AlertCircle size={36} className="mx-auto mb-4 text-red-400" />
-            <p className="text-white font-semibold mb-1">{error || 'Session not found'}</p>
+            <p className="text-white light:text-slate-900 font-semibold mb-1">{error || 'Session not found'}</p>
             <Button variant="ghost" size="sm" onClick={() => navigate('/app')} className="mt-4">
               <ArrowLeft size={14} /> Back to sessions
             </Button>
@@ -625,13 +625,13 @@ export default function SessionDetailPage() {
   )
 
   return (
-    <div className="min-h-screen flex bg-surface-400">
+    <div className="app-page">
       <Sidebar />
 
-      <main className="flex-1 flex flex-col overflow-hidden">
+      <main className="flex-1 flex flex-col overflow-hidden light:bg-slate-100">
 
         {/* ── Top bar ──────────────────────────────────────── */}
-        <header className="shrink-0 border-b border-white/8 px-6 py-4 flex items-center justify-between gap-4">
+        <header className="shrink-0 border-b border-white/8 light:border-slate-200/80 px-6 py-4 flex items-center justify-between gap-4">
           <div className="flex items-center gap-4 min-w-0">
             <button
               onClick={() => navigate('/app')}
@@ -647,7 +647,7 @@ export default function SessionDetailPage() {
                     value={titleDraft}
                     onChange={e => setTitleDraft(e.target.value)}
                     onKeyDown={e => { if (e.key === 'Enter') saveTitle(); if (e.key === 'Escape') cancelEditTitle() }}
-                    className="font-display font-bold text-lg text-white bg-white/8 border border-brand-500/50 rounded-lg px-3 py-1 focus:outline-none focus:ring-2 focus:ring-brand-500 w-64"
+                    className="font-display font-bold text-lg text-white light:text-slate-900 bg-white/8 border border-brand-500/50 rounded-lg px-3 py-1 focus:outline-none focus:ring-2 focus:ring-brand-500 w-64"
                   />
                   <button onClick={saveTitle} disabled={savingTitle} className="text-emerald-400 hover:text-emerald-300 disabled:opacity-50">
                     {savingTitle ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
@@ -658,7 +658,7 @@ export default function SessionDetailPage() {
                 </div>
               ) : (
                 <div className="flex items-center gap-2 group">
-                  <h1 className="font-display font-bold text-lg text-white truncate">
+                  <h1 className="font-display font-bold text-lg text-white light:text-slate-900 truncate">
                     {conv.title || 'Untitled session'}
                   </h1>
                   {isApproved
@@ -806,13 +806,13 @@ export default function SessionDetailPage() {
                 ].map(({ icon: Icon, text }) => (
                   <div
                     key={text}
-                    className="flex items-center gap-1.5 text-xs text-slate-400 bg-white/4 border border-white/8 rounded-full px-3 py-1.5"
+                    className="flex items-center gap-1.5 text-xs text-slate-400 bg-white/4 light:bg-slate-50/90 border border-white/8 light:border-slate-200/80 rounded-full px-3 py-1.5"
                   >
                     <Icon size={11} className="text-slate-500" />
                     {text}
                   </div>
                 ))}
-                <div className="flex items-center gap-1.5 text-xs text-slate-400 bg-white/4 border border-white/8 rounded-full px-3 py-1.5">
+                <div className="flex items-center gap-1.5 text-xs text-slate-400 bg-white/4 light:bg-slate-50/90 border border-white/8 light:border-slate-200/80 rounded-full px-3 py-1.5">
                   <Calendar size={11} className="text-slate-500" />
                   {new Date(conv.created_at).toLocaleDateString()}
                 </div>
@@ -820,8 +820,8 @@ export default function SessionDetailPage() {
 
               {/* Transcript card */}
               <Card variant="elevated" className="flex-1">
-                <div className="flex items-center justify-between px-5 py-4 border-b border-white/8">
-                  <h2 className="font-semibold text-white text-sm flex items-center gap-2">
+                <div className="flex items-center justify-between px-5 py-4 border-b border-white/8 light:border-slate-200/80">
+                  <h2 className="font-semibold text-white light:text-slate-900 text-sm flex items-center gap-2">
                     <FileText size={14} className="text-brand-400" />
                     Transcript
                   </h2>
@@ -858,7 +858,7 @@ export default function SessionDetailPage() {
                 <Card variant="elevated" className="p-5">
                   <div className="flex items-center gap-2 mb-1">
                     <MessageSquare size={14} className="text-brand-400" />
-                    <h2 className="font-semibold text-white text-sm">Colleague chat</h2>
+                    <h2 className="font-semibold text-white light:text-slate-900 text-sm">Colleague chat</h2>
                     {comments.length > 0 && (
                       <span className="ml-auto text-[10px] bg-brand-500/15 text-brand-300 border border-brand-500/25 rounded-full px-2 py-0.5 font-medium">
                         {comments.length}
@@ -886,7 +886,7 @@ export default function SessionDetailPage() {
                           </div>
                           <div className="flex-1 min-w-0">
                             <div className="flex items-baseline gap-2 mb-0.5">
-                              <span className="text-xs font-medium text-white">{c.author_name ?? 'Unknown'}</span>
+                              <span className="text-xs font-medium text-white light:text-slate-900">{c.author_name ?? 'Unknown'}</span>
                               <span className="text-[10px] text-slate-500">{formatRelative(c.created_at)}</span>
                             </div>
                             <p className="text-xs text-slate-300 leading-relaxed">{c.body}</p>
@@ -903,7 +903,7 @@ export default function SessionDetailPage() {
                       onChange={e => setCommentDraft(e.target.value)}
                       onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); postComment() } }}
                       placeholder="Write a message…"
-                      className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-brand-500"
+                      className="flex-1 bg-white/5 light:bg-white border border-white/10 light:border-slate-200 rounded-xl px-3 py-2 text-xs text-white light:text-slate-900 placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-brand-500"
                     />
                     <button
                       onClick={postComment}
@@ -925,10 +925,10 @@ export default function SessionDetailPage() {
                 <Card variant="elevated" className="p-5">
                   <div className="flex items-center gap-2 mb-3">
                     <LayoutTemplate size={16} className="text-brand-400 shrink-0" />
-                    <h2 className="font-semibold text-white text-sm">PDF template snapshot</h2>
+                    <h2 className="font-semibold text-white light:text-slate-900 text-sm">PDF template snapshot</h2>
                   </div>
                   <div className="space-y-3 text-sm">
-                    <div className="rounded-xl bg-white/4 border border-white/10 px-3 py-2.5">
+                    <div className="rounded-xl bg-white/4 light:bg-slate-50/90 border border-white/10 light:border-slate-200 px-3 py-2.5">
                       <div className="flex items-center justify-between gap-2 mb-1">
                         <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide">
                           Clinical note PDF
@@ -956,7 +956,7 @@ export default function SessionDetailPage() {
                         <p className="text-slate-500 text-xs">Not captured for this session.</p>
                       )}
                     </div>
-                    <div className="rounded-xl bg-white/4 border border-white/10 px-3 py-2.5">
+                    <div className="rounded-xl bg-white/4 light:bg-slate-50/90 border border-white/10 light:border-slate-200 px-3 py-2.5">
                       <div className="flex items-center justify-between gap-2 mb-1">
                         <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide">
                           Patient-facing PDF
@@ -995,7 +995,7 @@ export default function SessionDetailPage() {
               {/* Summary text */}
               {summary?.summary_text && (
                 <Card variant="elevated" className="p-5">
-                  <h2 className="font-semibold text-white text-sm mb-3 flex items-center gap-2">
+                  <h2 className="font-semibold text-white light:text-slate-900 text-sm mb-3 flex items-center gap-2">
                     <Brain size={14} className="text-brand-400" />
                     Summary
                   </h2>
@@ -1005,7 +1005,7 @@ export default function SessionDetailPage() {
 
               {summary?.patient_facing_summary && (
                 <Card variant="elevated" className="p-5">
-                  <h2 className="font-semibold text-white text-sm mb-3 flex items-center gap-2">
+                  <h2 className="font-semibold text-white light:text-slate-900 text-sm mb-3 flex items-center gap-2">
                     <User size={14} className="text-brand-400" />
                     Patient-friendly summary
                   </h2>
@@ -1021,7 +1021,7 @@ export default function SessionDetailPage() {
               {/* Extracted medical fields — view or edit */}
               <Card variant="elevated" className="p-5">
                 <div className="flex items-center justify-between mb-4">
-                  <h2 className="font-semibold text-white text-sm flex items-center gap-2">
+                  <h2 className="font-semibold text-white light:text-slate-900 text-sm flex items-center gap-2">
                     <Brain size={14} className="text-brand-400" />
                     Medical Extraction
                   </h2>
@@ -1041,7 +1041,7 @@ export default function SessionDetailPage() {
                       </button>
                       <button
                         onClick={cancelEditSummary}
-                        className="flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200 bg-white/4 border border-white/10 rounded-lg px-2.5 py-1 transition-colors"
+                        className="flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200 bg-white/4 light:bg-slate-50/90 border border-white/10 light:border-slate-200 rounded-lg px-2.5 py-1 transition-colors"
                       >
                         <X size={11} /> Cancel
                       </button>
@@ -1077,7 +1077,7 @@ export default function SessionDetailPage() {
                           value={summaryDraft[key] ?? ''}
                           onChange={e => setSummaryDraft(d => ({ ...d, [key]: e.target.value }))}
                           placeholder={`Enter ${label.toLowerCase()}…`}
-                          className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
+                          className="w-full bg-white/5 light:bg-white border border-white/10 light:border-slate-200 rounded-xl px-3 py-2 text-sm text-white light:text-slate-900 placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
                         />
                       </div>
                     ))}
@@ -1091,7 +1091,7 @@ export default function SessionDetailPage() {
                         onChange={e => setSummaryDraft(d => ({ ...d, additional_notes: e.target.value }))}
                         placeholder="Medicines, allergies, follow-up instructions…"
                         rows={3}
-                        className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent resize-none"
+                        className="w-full bg-white/5 light:bg-white border border-white/10 light:border-slate-200 rounded-xl px-3 py-2 text-sm text-white light:text-slate-900 placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent resize-none"
                       />
                     </div>
                   </div>
@@ -1119,7 +1119,7 @@ export default function SessionDetailPage() {
                         </div>
                       ))}
                     {summary!.additional_notes && (
-                      <div className="pt-3 border-t border-white/8">
+                      <div className="pt-3 border-t border-white/8 light:border-slate-200/80">
                         <div className="flex items-center gap-2 mb-2">
                           <StickyNote size={11} className="text-slate-500" />
                           <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">Notes</p>
@@ -1144,7 +1144,7 @@ export default function SessionDetailPage() {
               {isOwner && (conv.status === 'complete' || conv.status === 'approved') && (
                 <Card variant="elevated" className="p-5">
                   <div className="flex items-center justify-between mb-3">
-                    <h2 className="font-semibold text-white text-sm flex items-center gap-2">
+                    <h2 className="font-semibold text-white light:text-slate-900 text-sm flex items-center gap-2">
                       <Sparkles size={14} className="text-brand-400" />
                       Clinical Insights
                     </h2>
@@ -1263,7 +1263,7 @@ export default function SessionDetailPage() {
                           </div>
                         )}
 
-                        <p className="text-[10px] text-slate-600 pt-1 border-t border-white/5">
+                        <p className="text-[10px] text-slate-600 pt-1 border-t border-white/5 light:border-slate-200/60">
                           AI suggestions only — requires professional clinical judgment.
                         </p>
                       </div>
@@ -1299,7 +1299,7 @@ export default function SessionDetailPage() {
                   <Card variant="elevated" className="p-5">
                     <div className="flex items-center gap-2 mb-3">
                       <Bell size={14} className="text-amber-400" />
-                      <h2 className="font-semibold text-white text-sm">Field Alerts</h2>
+                      <h2 className="font-semibold text-white light:text-slate-900 text-sm">Field Alerts</h2>
                       <span className="ml-auto text-[10px] bg-amber-500/15 text-amber-300 border border-amber-500/25 rounded-full px-2 py-0.5 font-medium">
                         {reminders.length} missing
                       </span>
@@ -1344,7 +1344,7 @@ export default function SessionDetailPage() {
                   <Card variant="elevated" className="p-5">
                     <div className="flex items-center gap-2 mb-3">
                       <Sparkles size={14} className="text-violet-400" />
-                      <h2 className="font-semibold text-white text-sm">Follow-up Questions</h2>
+                      <h2 className="font-semibold text-white light:text-slate-900 text-sm">Follow-up Questions</h2>
                       <span className="ml-auto text-[10px] bg-violet-500/15 text-violet-300 border border-violet-500/25 rounded-full px-2 py-0.5 font-medium">
                         {questions.length} suggested
                       </span>
@@ -1379,7 +1379,7 @@ export default function SessionDetailPage() {
               {isOwner && (
                 <Card variant="elevated" className="p-5">
                   <div className="flex items-center justify-between mb-3">
-                    <h2 className="font-semibold text-white text-sm flex items-center gap-2">
+                    <h2 className="font-semibold text-white light:text-slate-900 text-sm flex items-center gap-2">
                       <User size={14} className="text-brand-400" />
                       Patient
                     </h2>
@@ -1423,7 +1423,7 @@ export default function SessionDetailPage() {
                         </div>
                       )}
                       {conv.patient.medical_history && (
-                        <p className="text-xs text-slate-400 bg-white/4 rounded-lg px-3 py-2 leading-relaxed line-clamp-3">
+                        <p className="text-xs text-slate-400 bg-white/4 light:bg-slate-50/90 rounded-lg px-3 py-2 leading-relaxed line-clamp-3">
                           {conv.patient.medical_history}
                         </p>
                       )}
@@ -1451,7 +1451,7 @@ export default function SessionDetailPage() {
                               onFocus={() => patientSearch && setShowPatientDropdown(true)}
                               onBlur={() => setTimeout(() => setShowPatientDropdown(false), 150)}
                               placeholder="Search patients…"
-                              className="w-full bg-white/5 border border-white/10 rounded-xl pl-8 pr-3 py-2 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-brand-500"
+                              className="w-full bg-white/5 light:bg-white border border-white/10 light:border-slate-200 rounded-xl pl-8 pr-3 py-2 text-xs text-white light:text-slate-900 placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-brand-500"
                             />
                             {searchingPatient && (
                               <Loader2 size={11} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 animate-spin" />
@@ -1459,7 +1459,7 @@ export default function SessionDetailPage() {
 
                             {/* Dropdown */}
                             {showPatientDropdown && (patientResults.length > 0 || patientSearch) && (
-                              <div className="absolute z-20 top-full mt-1 w-full bg-surface-300 border border-white/10 rounded-xl shadow-xl overflow-hidden">
+                              <div className="absolute z-20 top-full mt-1 w-full bg-surface-300 light:bg-white border border-white/10 light:border-slate-200 rounded-xl shadow-xl overflow-hidden">
                                 {patientResults.map(p => (
                                   <button
                                     key={p.id}
@@ -1470,7 +1470,7 @@ export default function SessionDetailPage() {
                                       <span className="text-[10px] font-bold text-brand-400">{p.name.charAt(0).toUpperCase()}</span>
                                     </div>
                                     <div className="min-w-0">
-                                      <p className="text-xs font-medium text-white truncate">{p.name}</p>
+                                      <p className="text-xs font-medium text-white light:text-slate-900 truncate">{p.name}</p>
                                       <p className="text-[10px] text-slate-500">{[p.age, p.gender].filter(Boolean).join(' · ') || '—'}</p>
                                     </div>
                                     <Link2 size={10} className="ml-auto text-slate-600 shrink-0" />
@@ -1500,7 +1500,7 @@ export default function SessionDetailPage() {
                             onKeyDown={e => { if (e.key === 'Enter') createAndLinkPatient() }}
                             placeholder="Patient full name…"
                             autoFocus
-                            className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-brand-500"
+                            className="w-full bg-white/5 light:bg-white border border-white/10 light:border-slate-200 rounded-xl px-3 py-2 text-xs text-white light:text-slate-900 placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-brand-500"
                           />
                           <div className="flex gap-2">
                             <button
@@ -1513,7 +1513,7 @@ export default function SessionDetailPage() {
                             </button>
                             <button
                               onClick={() => { setShowNewPatient(false); setNewPatientName('') }}
-                              className="text-xs text-slate-500 hover:text-slate-300 bg-white/4 border border-white/8 rounded-lg px-3 py-1.5 transition-colors"
+                              className="text-xs text-slate-500 hover:text-slate-300 bg-white/4 light:bg-slate-50/90 border border-white/8 light:border-slate-200/80 rounded-lg px-3 py-1.5 transition-colors"
                             >
                               Cancel
                             </button>
@@ -1530,7 +1530,7 @@ export default function SessionDetailPage() {
                 <Card variant="elevated" className="p-5">
                   <div className="flex items-center gap-2 mb-4">
                     <Shield size={14} className="text-brand-400" />
-                    <h2 className="font-semibold text-white text-sm">Access</h2>
+                    <h2 className="font-semibold text-white light:text-slate-900 text-sm">Access</h2>
                     {grants.filter(g => g.is_active).length > 0 && (
                       <span className="ml-auto text-[10px] bg-brand-500/15 text-brand-300 border border-brand-500/25 rounded-full px-2 py-0.5 font-medium">
                         {grants.filter(g => g.is_active).length} active
@@ -1553,7 +1553,7 @@ export default function SessionDetailPage() {
                         return (
                         <div
                           key={g.id}
-                          className={`flex items-center gap-2 rounded-xl border px-3 py-2 ${g.is_active ? 'border-white/10 bg-white/4' : 'border-white/5 bg-white/2 opacity-50'}`}
+                          className={`flex items-center gap-2 rounded-xl border px-3 py-2 ${g.is_active ? 'border-white/10 light:border-slate-200 bg-white/4 light:bg-slate-50/90' : 'border-white/5 light:border-slate-200/60 bg-white/2 opacity-50'}`}
                         >
                           <div className="h-6 w-6 rounded-full bg-brand-500/20 border border-brand-500/30 flex items-center justify-center shrink-0">
                             <span className="text-[9px] font-bold text-brand-400">
@@ -1561,7 +1561,7 @@ export default function SessionDetailPage() {
                             </span>
                           </div>
                           <div className="flex-1 min-w-0">
-                            <p className="text-xs font-medium text-white truncate">
+                            <p className="text-xs font-medium text-white light:text-slate-900 truncate">
                               {displayName ?? (granteeKey ? `${granteeKey.slice(0, 8)}…` : 'Unknown')}
                             </p>
                             {g.expires_at && (
@@ -1592,7 +1592,7 @@ export default function SessionDetailPage() {
                   )}
 
                   {/* Grant new access */}
-                  <div className="space-y-2 pt-3 border-t border-white/8">
+                  <div className="space-y-2 pt-3 border-t border-white/8 light:border-slate-200/80">
                     <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">Grant access</p>
 
                     {/* Colleague search */}
@@ -1605,13 +1605,13 @@ export default function SessionDetailPage() {
                         onFocus={() => colleagueSearch && setShowColleagueDD(true)}
                         onBlur={() => setTimeout(() => setShowColleagueDD(false), 150)}
                         placeholder="Search colleague by name…"
-                        className="w-full bg-white/5 border border-white/10 rounded-xl pl-8 pr-3 py-2 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-brand-500"
+                        className="w-full bg-white/5 light:bg-white border border-white/10 light:border-slate-200 rounded-xl pl-8 pr-3 py-2 text-xs text-white light:text-slate-900 placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-brand-500"
                       />
                       {searchingColleague && (
                         <Loader2 size={11} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 animate-spin" />
                       )}
                       {showColleagueDD && colleagueResults.length > 0 && (
-                        <div className="absolute z-20 top-full mt-1 w-full bg-surface-300 border border-white/10 rounded-xl shadow-xl overflow-hidden">
+                        <div className="absolute z-20 top-full mt-1 w-full bg-surface-300 light:bg-white border border-white/10 light:border-slate-200 rounded-xl shadow-xl overflow-hidden">
                           {colleagueResults.map(u => (
                             <button
                               key={u.id}
@@ -1622,7 +1622,7 @@ export default function SessionDetailPage() {
                                 <span className="text-[10px] font-bold text-violet-400">{u.name.charAt(0).toUpperCase()}</span>
                               </div>
                               <div className="min-w-0">
-                                <p className="text-xs font-medium text-white truncate">{u.name}</p>
+                                <p className="text-xs font-medium text-white light:text-slate-900 truncate">{u.name}</p>
                                 <p className="text-[10px] text-slate-500 truncate">{u.email}</p>
                               </div>
                             </button>
@@ -1637,7 +1637,7 @@ export default function SessionDetailPage() {
                         <select
                           value={grantPermission}
                           onChange={e => setGrantPermission(e.target.value as 'read' | 'comment' | 'write')}
-                          className="w-full appearance-none bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-2 focus:ring-brand-500 pr-7"
+                          className="w-full appearance-none bg-white/5 light:bg-white border border-white/10 light:border-slate-200 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-2 focus:ring-brand-500 pr-7"
                         >
                           <option value="read">Read</option>
                           <option value="comment">Comment</option>
@@ -1650,7 +1650,7 @@ export default function SessionDetailPage() {
                         value={grantExpiry}
                         onChange={e => setGrantExpiry(e.target.value)}
                         placeholder="Expiry (opt.)"
-                        className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-2 focus:ring-brand-500"
+                        className="flex-1 bg-white/5 light:bg-white border border-white/10 light:border-slate-200 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-2 focus:ring-brand-500"
                         title="Expiry date (optional)"
                       />
                     </div>

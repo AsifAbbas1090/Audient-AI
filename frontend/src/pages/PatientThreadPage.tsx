@@ -91,7 +91,7 @@ function SessionRow({ session, index }: { session: Session; index: number }) {
 
           {/* Main info */}
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-white truncate group-hover:text-brand-300 transition-colors">
+            <p className="text-sm font-medium text-white light:text-slate-900 truncate group-hover:text-brand-300 light:group-hover:text-brand-700 transition-colors">
               {session.title || 'Untitled session'}
             </p>
             <div className="flex items-center gap-3 mt-0.5 text-xs text-slate-500">
@@ -182,9 +182,9 @@ export default function PatientThreadPage() {
   // ── Loading ───────────────────────────────────────────────
   if (loading) {
     return (
-      <div className="min-h-screen flex bg-surface-400">
+      <div className="app-page">
         <Sidebar />
-        <main className="flex-1 flex flex-col">
+        <main className="flex-1 flex flex-col light:bg-slate-100">
           <header className="border-b border-white/8 px-6 py-4 flex items-center gap-4">
             <div className="h-8 w-8 rounded-xl bg-white/4 animate-pulse" />
             <div className="h-5 w-48 rounded-lg bg-white/4 animate-pulse" />
@@ -201,12 +201,12 @@ export default function PatientThreadPage() {
   // ── Error ─────────────────────────────────────────────────
   if (error || !patient) {
     return (
-      <div className="min-h-screen flex bg-surface-400">
+      <div className="app-page">
         <Sidebar />
-        <main className="flex-1 flex items-center justify-center">
+        <main className="flex-1 flex items-center justify-center light:bg-slate-100">
           <div className="text-center">
             <AlertCircle size={36} className="mx-auto mb-4 text-red-400" />
-            <p className="text-white font-semibold mb-1">{error || 'Patient not found'}</p>
+            <p className="text-white light:text-slate-900 font-semibold mb-1">{error || 'Patient not found'}</p>
             <Button variant="ghost" size="sm" onClick={() => navigate('/app')} className="mt-4">
               <ArrowLeft size={14} /> Back to sessions
             </Button>
@@ -219,17 +219,17 @@ export default function PatientThreadPage() {
   const sessions = patient.sessions ?? []
 
   return (
-    <div className="min-h-screen flex bg-surface-400">
+    <div className="app-page">
       <Sidebar />
 
-      <main className="flex-1 overflow-y-auto">
+      <main className="flex-1 overflow-y-auto light:bg-slate-100">
 
         {/* ── Top bar ──────────────────────────────────────── */}
         <header className="border-b border-white/8 px-6 py-4 flex items-center justify-between gap-4">
           <div className="flex items-center gap-4 min-w-0">
             <button
               onClick={() => navigate(-1)}
-              className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-white/8 transition-colors shrink-0"
+              className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-white/8 light:hover:text-slate-900 light:hover:bg-slate-200/80 transition-colors shrink-0"
             >
               <ArrowLeft size={18} />
             </button>
@@ -239,7 +239,7 @@ export default function PatientThreadPage() {
               </div>
               <div className="min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <h1 className="font-display font-bold text-lg text-white truncate">{patient.name}</h1>
+                  <h1 className="font-display font-bold text-lg text-white light:text-slate-900 truncate">{patient.name}</h1>
                   {patient.patient_code && (
                     <span className="inline-flex items-center gap-1 text-[11px] font-mono font-bold text-brand-400 bg-brand-500/10 border border-brand-500/20 rounded-full px-2.5 py-0.5 shrink-0">
                       <Tag size={9} />
@@ -278,7 +278,7 @@ export default function PatientThreadPage() {
           {/* ── Patient details card ─────────────────────── */}
           <Card variant="elevated" className="p-5">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="font-semibold text-white text-sm flex items-center gap-2">
+              <h2 className="font-semibold text-white light:text-slate-900 text-sm flex items-center gap-2">
                 <User size={14} className="text-brand-400" />
                 Patient details
               </h2>
@@ -348,7 +348,7 @@ export default function PatientThreadPage() {
                       onChange={e => setDraft(d => ({ ...d, medical_history: e.target.value }))}
                       placeholder="Pre-existing conditions, allergies, chronic medications…"
                       rows={3}
-                      className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent resize-none"
+                      className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm text-white light:text-slate-900 placeholder:text-slate-600 light:bg-white light:border-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent resize-none"
                     />
                   </div>
                 </motion.div>
@@ -372,7 +372,7 @@ export default function PatientThreadPage() {
                         </div>
                         <div>
                           <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">{label}</p>
-                          <p className="text-sm text-white">{value}</p>
+                          <p className="text-sm text-white light:text-slate-900">{value}</p>
                         </div>
                       </div>
                     ))}
@@ -399,7 +399,7 @@ export default function PatientThreadPage() {
           {/* ── Session timeline ─────────────────────────── */}
           <div>
             <div className="flex items-center justify-between mb-4">
-              <h2 className="font-semibold text-white text-sm flex items-center gap-2">
+              <h2 className="font-semibold text-white light:text-slate-900 text-sm flex items-center gap-2">
                 <FileText size={14} className="text-brand-400" />
                 Session history
                 <span className="text-xs text-slate-500 font-normal ml-1">

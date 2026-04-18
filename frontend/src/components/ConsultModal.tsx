@@ -131,27 +131,27 @@ export function ConsultModal({ session, onClose, onSent }: ConsultModalProps) {
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.96, y: 8 }}
         transition={{ duration: 0.2 }}
-        className="relative w-full max-w-lg bg-surface-200 border border-white/10 rounded-2xl shadow-2xl overflow-hidden"
+        className="relative w-full max-w-lg bg-surface-200 border border-white/10 rounded-2xl shadow-2xl overflow-hidden light:bg-white light:border-slate-200"
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-white/8">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-white/8 light:border-slate-200">
           <div>
-            <h2 className="font-semibold text-white text-sm">Request a Consultation</h2>
-            <p className="text-xs text-slate-500 mt-0.5">Step {step} of {hasPatientThread ? 4 : 3}</p>
+            <h2 className="font-semibold text-white light:text-slate-900 text-sm">Request a Consultation</h2>
+            <p className="text-xs text-slate-500 light:text-slate-600 mt-0.5">Step {step} of {hasPatientThread ? 4 : 3}</p>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/8 transition-colors">
+          <button onClick={onClose} className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/8 light:hover:text-slate-900 light:hover:bg-slate-100 transition-colors">
             <X size={16} />
           </button>
         </div>
 
         {/* Step indicator */}
-        <div className="flex px-6 py-3 gap-1.5 border-b border-white/6">
+        <div className="flex px-6 py-3 gap-1.5 border-b border-white/6 light:border-slate-200/80">
           {Array.from({ length: hasPatientThread ? 4 : 3 }).map((_, i) => (
             <div
               key={i}
               className={cn(
                 'h-1 flex-1 rounded-full transition-colors',
-                step > i ? 'bg-brand-500' : 'bg-white/10',
+                step > i ? 'bg-brand-500' : 'bg-white/10 light:bg-slate-200',
               )}
             />
           ))}
@@ -163,7 +163,7 @@ export function ConsultModal({ session, onClose, onSent }: ConsultModalProps) {
             {/* ── Step 1: Mode picker ── */}
             {step === 1 && (
               <motion.div key="step1" initial={{ opacity: 0, x: 12 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -12 }}>
-                <p className="text-xs text-slate-400 mb-4">What type of consultation do you need?</p>
+                <p className="text-xs text-slate-400 light:text-slate-600 mb-4">What type of consultation do you need?</p>
                 <div className="space-y-2">
                   {MODES.map(m => {
                     const Icon = m.icon
@@ -174,13 +174,13 @@ export function ConsultModal({ session, onClose, onSent }: ConsultModalProps) {
                         onClick={() => setMode(m.id)}
                         className={cn(
                           'w-full flex items-start gap-3 rounded-xl border px-4 py-3.5 text-left transition-all',
-                          selected ? m.bgSelected : `border-white/10 bg-white/4 hover:border-white/20`,
+                          selected ? m.bgSelected : `border-white/10 bg-white/4 hover:border-white/20 light:border-slate-200 light:bg-slate-50 light:hover:border-slate-300`,
                         )}
                       >
                         <Icon size={16} className={cn('mt-0.5 shrink-0', selected ? m.color : 'text-slate-500')} />
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2 flex-wrap">
-                            <p className={cn('text-sm font-medium', selected ? 'text-white' : 'text-slate-300')}>{m.label}</p>
+                            <p className={cn('text-sm font-medium', selected ? 'text-white light:text-slate-900' : 'text-slate-300 light:text-slate-700')}>{m.label}</p>
                             <span className={cn('text-[10px] px-1.5 py-0.5 rounded-full border font-medium shrink-0', m.bg, m.color, m.border)}>
                               {m.access} · {m.expiry}
                             </span>
@@ -207,7 +207,7 @@ export function ConsultModal({ session, onClose, onSent }: ConsultModalProps) {
                     value={query}
                     onChange={e => setQuery(e.target.value)}
                     placeholder="Search by name or email…"
-                    className="w-full bg-white/5 border border-white/10 rounded-xl pl-9 pr-3 py-2.5 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-brand-500"
+                    className="w-full bg-white/5 border border-white/10 rounded-xl pl-9 pr-3 py-2.5 text-sm text-white light:text-slate-900 placeholder:text-slate-500 light:bg-white light:border-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-500"
                   />
                   {searching && <Loader2 size={12} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 animate-spin" />}
                 </div>
@@ -226,8 +226,8 @@ export function ConsultModal({ session, onClose, onSent }: ConsultModalProps) {
                         className={cn(
                           'w-full flex items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition-all',
                           selected
-                            ? 'border-brand-500/40 bg-brand-500/15 text-white'
-                            : 'border-white/8 bg-white/4 hover:border-white/20 text-slate-300',
+                            ? 'border-brand-500/40 bg-brand-500/15 text-white light:text-slate-900'
+                            : 'border-white/8 bg-white/4 hover:border-white/20 text-slate-300 light:border-slate-200 light:bg-slate-50 light:text-slate-800',
                         )}
                       >
                         <div className="h-7 w-7 rounded-full bg-brand-500/20 border border-brand-500/30 flex items-center justify-center shrink-0">
@@ -277,12 +277,12 @@ export function ConsultModal({ session, onClose, onSent }: ConsultModalProps) {
                         onClick={() => setIncludeThread(opt.value)}
                         className={cn(
                           'w-full flex items-start gap-3 rounded-xl border px-4 py-3.5 text-left transition-all',
-                          sel ? 'border-brand-500/40 bg-brand-500/15' : 'border-white/10 bg-white/4 hover:border-white/20',
+                          sel ? 'border-brand-500/40 bg-brand-500/15' : 'border-white/10 bg-white/4 hover:border-white/20 light:border-slate-200 light:bg-slate-50',
                         )}
                       >
                         <Icon size={15} className={cn('mt-0.5 shrink-0', sel ? 'text-brand-400' : 'text-slate-500')} />
                         <div>
-                          <p className={cn('text-sm font-medium', sel ? 'text-white' : 'text-slate-300')}>{opt.label}</p>
+                          <p className={cn('text-sm font-medium', sel ? 'text-white light:text-slate-900' : 'text-slate-300 light:text-slate-700')}>{opt.label}</p>
                           <p className="text-xs text-slate-500 mt-0.5">{opt.desc}</p>
                         </div>
                         {sel && <CheckCircle2 size={13} className="text-brand-400 shrink-0 ml-auto mt-0.5" />}
@@ -341,7 +341,7 @@ export function ConsultModal({ session, onClose, onSent }: ConsultModalProps) {
                     onChange={e => setNote(e.target.value)}
                     placeholder="Add a clinical note — optional"
                     rows={3}
-                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-brand-500 resize-none"
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm text-white light:text-slate-900 placeholder:text-slate-600 light:bg-white light:border-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-500 resize-none"
                   />
                 </div>
               </motion.div>
@@ -351,7 +351,7 @@ export function ConsultModal({ session, onClose, onSent }: ConsultModalProps) {
         </div>
 
         {/* Footer nav */}
-        <div className="flex items-center justify-between gap-3 px-6 py-4 border-t border-white/8">
+        <div className="flex items-center justify-between gap-3 px-6 py-4 border-t border-white/8 light:border-slate-200">
           <button
             onClick={() => step > 1 ? setStep(s => (s - 1) as typeof step) : onClose()}
             className="flex items-center gap-1.5 text-sm text-slate-400 hover:text-slate-200 transition-colors"

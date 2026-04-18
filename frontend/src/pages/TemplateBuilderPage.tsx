@@ -406,29 +406,29 @@ export default function TemplateBuilderPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex bg-surface-400">
+      <div className="app-page">
         <Sidebar />
-        <main className="flex-1 p-6 text-slate-400">Loading template…</main>
+        <main className="flex-1 p-6 text-slate-400 light:bg-slate-100 light:text-slate-600">Loading template…</main>
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen flex bg-surface-400">
+    <div className="app-page">
       <Sidebar />
-      <main className="flex-1 p-6 overflow-y-auto">
+      <main className="flex-1 p-6 overflow-y-auto light:bg-slate-100">
         <div className="max-w-5xl mx-auto space-y-5">
           <Card variant="elevated" className="p-5 space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div>
-                <h1 className="text-white font-semibold text-lg">Template Builder</h1>
+                <h1 className="text-white light:text-slate-900 font-semibold text-lg">Template Builder</h1>
                 <p className="text-xs text-slate-500 mt-1">
                   Clinical and patient-facing layouts are versioned separately. Session PDFs lock to the versions active when
                   each visit was finalized. Section labels for <em>new</em> accounts follow your specialty from Settings; you
                   can rename or reorder anything here.
                 </p>
               </div>
-              <div className="flex rounded-xl border border-white/10 p-0.5 bg-white/4">
+              <div className="flex rounded-xl border border-white/10 p-0.5 bg-white/4 light:border-slate-200 light:bg-slate-100">
                 <button
                   type="button"
                   onClick={() => setPurposeTab('clinical')}
@@ -487,7 +487,7 @@ export default function TemplateBuilderPage() {
           {/* ── PDF Layout picker ─────────────────────────────────────── */}
           <Card variant="elevated" className="p-5 space-y-4">
             <div>
-              <h2 className="text-white font-medium">PDF Letterhead Design</h2>
+              <h2 className="text-white light:text-slate-900 font-medium">PDF Letterhead Design</h2>
               <p className="text-[11px] text-slate-500 mt-1">
                 Choose a professional letterhead style. Your clinic name, doctor details, and logo from your profile
                 auto-fill into the selected design. Click any template to select it, then preview to see the result.
@@ -512,7 +512,7 @@ export default function TemplateBuilderPage() {
                       {card.preview}
                     </div>
                     <div className="w-full">
-                      <div className={`text-xs font-medium leading-snug ${isSelected ? 'text-white' : 'text-slate-300'}`}>
+                      <div className={`text-xs font-medium leading-snug ${isSelected ? 'text-white light:text-slate-900' : 'text-slate-300 light:text-slate-600'}`}>
                         {card.label}
                         {isSelected && (
                           <span className="ml-1.5 text-[10px] text-brand-400 font-normal">✓ selected</span>
@@ -529,7 +529,7 @@ export default function TemplateBuilderPage() {
           {/* ── Sections ─────────────────────────────────────────────── */}
           <Card variant="elevated" className="p-5 space-y-3">
             <div className="flex items-center justify-between">
-              <h2 className="text-white font-medium">Sections</h2>
+              <h2 className="text-white light:text-slate-900 font-medium">Sections</h2>
               <Button size="sm" variant="secondary" onClick={addSection}>
                 <Plus size={13} /> Add Section
               </Button>
@@ -573,7 +573,7 @@ export default function TemplateBuilderPage() {
 
           {/* ── Version history ─────────────────────────────────────── */}
           <Card variant="elevated" className="p-5">
-            <h2 className="text-white font-medium mb-3">Version History</h2>
+            <h2 className="text-white light:text-slate-900 font-medium mb-3">Version History</h2>
             <div className="space-y-2">
               {versions.map(v => (
                 <div

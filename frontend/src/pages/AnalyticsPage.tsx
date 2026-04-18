@@ -121,15 +121,15 @@ export default function AnalyticsPage() {
 
   // ── Render ───────────────────────────────────────────────
   return (
-    <div className="min-h-screen flex bg-surface-400">
+    <div className="app-page">
       <Sidebar />
 
-      <main className="flex-1 flex flex-col overflow-hidden">
+      <main className="flex-1 flex flex-col overflow-hidden light:bg-slate-100">
 
         {/* ── Top bar ─────────────────────────────────────── */}
         <header className="shrink-0 border-b border-white/8 px-6 py-4 flex items-center justify-between">
           <div>
-            <h1 className="font-display font-bold text-lg text-white">Analytics</h1>
+            <h1 className="font-display font-bold text-lg text-white light:text-slate-900">Analytics</h1>
             <p className="text-xs text-slate-500 mt-0.5">
               {admin ? 'System-wide' : 'Your'} session activity and transcription metrics
             </p>
@@ -216,7 +216,7 @@ export default function AnalyticsPage() {
                   { label: 'Failed',         value: adminStats.conversations.failed },
                 ].map(item => (
                   <div key={item.label}>
-                    <div className="text-lg font-bold text-white">{item.value}</div>
+                    <div className="text-lg font-bold text-white light:text-slate-900">{item.value}</div>
                     <div className="text-[10px] text-slate-500 mt-0.5">{item.label}</div>
                   </div>
                 ))}
@@ -227,7 +227,7 @@ export default function AnalyticsPage() {
           {/* ── Activity chart ───────────────────────────── */}
           <Card variant="elevated" className="p-5">
             <div className="flex items-center justify-between mb-6">
-              <h2 className="font-semibold text-white text-sm flex items-center gap-2">
+              <h2 className="font-semibold text-white light:text-slate-900 text-sm flex items-center gap-2">
                 <BarChart3 size={15} className="text-brand-400" />
                 Sessions — Last 7 Days
               </h2>
@@ -264,7 +264,7 @@ export default function AnalyticsPage() {
 
             {/* ── Status breakdown ────────────────────────── */}
             <Card variant="elevated" className="p-5">
-              <h2 className="font-semibold text-white text-sm flex items-center gap-2 mb-5">
+              <h2 className="font-semibold text-white light:text-slate-900 text-sm flex items-center gap-2 mb-5">
                 <CheckCircle2 size={15} className="text-brand-400" />
                 Session Status
               </h2>
@@ -309,7 +309,7 @@ export default function AnalyticsPage() {
 
             {/* ── Language breakdown ───────────────────────── */}
             <Card variant="elevated" className="p-5">
-              <h2 className="font-semibold text-white text-sm flex items-center gap-2 mb-5">
+              <h2 className="font-semibold text-white light:text-slate-900 text-sm flex items-center gap-2 mb-5">
                 <Globe size={15} className="text-brand-400" />
                 Languages Detected
               </h2>
@@ -349,7 +349,7 @@ export default function AnalyticsPage() {
           {/* ── Recent sessions table ────────────────────── */}
           <Card variant="elevated">
             <div className="px-5 py-4 border-b border-white/8">
-              <h2 className="font-semibold text-white text-sm flex items-center gap-2">
+              <h2 className="font-semibold text-white light:text-slate-900 text-sm flex items-center gap-2">
                 <Mic2 size={15} className="text-brand-400" />
                 Recent Sessions
                 <span className="ml-1 text-xs text-slate-500 font-normal">({convs.length})</span>
@@ -376,7 +376,7 @@ export default function AnalyticsPage() {
                 {convs.slice(0, 8).map(c => (
                   <div key={c.id} className="flex items-center gap-4 px-5 py-3 hover:bg-white/3 transition-colors">
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-white truncate">
+                      <p className="text-sm font-medium text-white light:text-slate-900 truncate">
                         {c.title || 'Untitled session'}
                       </p>
                       <p className="text-xs text-slate-500 mt-0.5">

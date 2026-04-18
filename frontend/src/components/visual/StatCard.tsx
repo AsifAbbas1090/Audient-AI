@@ -14,14 +14,15 @@ export function StatCard({ label, value, icon: Icon, trend, className, iconColor
   return (
     <div className={cn(
       'rounded-2xl border border-white/8 bg-white/4 backdrop-blur p-5 flex items-start gap-4',
+      'light:border-slate-200 light:bg-white light:shadow-soft',
       className
     )}>
-      <div className={cn('h-10 w-10 rounded-xl flex items-center justify-center bg-white/5 shrink-0', iconColor)}>
+      <div className={cn('h-10 w-10 rounded-xl flex items-center justify-center bg-white/5 shrink-0 light:bg-slate-100', iconColor)}>
         <Icon size={18} />
       </div>
       <div className="min-w-0">
-        <div className="text-2xl font-bold font-display text-white leading-none">{value}</div>
-        <div className="text-xs text-slate-500 mt-1">{label}</div>
+        <div className="text-2xl font-bold font-display text-white light:text-slate-900 leading-none">{value}</div>
+        <div className="text-xs text-slate-500 light:text-slate-600 mt-1">{label}</div>
         {trend && (
           <div className={cn('text-xs font-medium mt-1.5', trend.up ? 'text-emerald-400' : 'text-red-400')}>
             {trend.up ? '↑' : '↓'} {trend.value}
