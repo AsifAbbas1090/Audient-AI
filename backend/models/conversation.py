@@ -61,6 +61,13 @@ class Conversation(db.Model):
         nullable=True,
         index=True,
     )
+    # Locked patient-facing layout + branding snapshot for this session (legal/audit trail)
+    patient_template_version_id = db.Column(
+        db.String(36),
+        db.ForeignKey("doctor_template_versions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     # One-to-one relationships (cascade delete children with parent)
     audio_file = db.relationship(
@@ -72,7 +79,12 @@ class Conversation(db.Model):
     summary = db.relationship(
         "Summary", backref="conversation", uselist=False, cascade="all, delete-orphan"
     )
-    template_version = db.relationship("DoctorTemplateVersion", foreign_keys=[template_version_id])
+    template_version = db.relationship(
+        "DoctorTemplateVersion", foreign_keys=[template_version_id]
+    )
+    patient_template_version = db.relationship(
+        "DoctorTemplateVersion", foreign_keys=[patient_template_version_id]
+    )
 
     def to_dict(self) -> dict:
         return {
@@ -87,31 +99,41 @@ class Conversation(db.Model):
             "created_at":  self.created_at.isoformat() if self.created_at else None,
             "approved_at": self.approved_at.isoformat() if self.approved_at else None,
             "deleted_at":  self.deleted_at.isoformat()  if self.deleted_at  else None,
-            "patient_id":  self.patient_id,
-            "patient_name": self.patient.name if self.patient else None,
+            "patient_id":    self.patient_id,
+            "patient_code":  self.patient.patient_code if self.patient else None,
+            "patient_name":  self.patient.name if self.patient else None,
             "parent_id":   self.parent_id,
             "template_version_id": self.template_version_id,
+            "patient_template_version_id": self.patient_template_version_id,
         }
 
-    def template_version_public_dict(self) -> dict | None:
-        """Lightweight template version metadata for API (no full schema dump)."""
-        tv = self.template_version
+    def _template_version_meta(self, tv) -> dict | None:
         if not tv:
             return None
         tmpl = getattr(tv, "template", None)
-        template_name = tmpl.name if tmpl else None
         return {
             "id": tv.id,
             "template_id": tv.template_id,
-            "template_name": template_name,
+            "template_name": tmpl.name if tmpl else None,
+            "purpose": tmpl.purpose if tmpl else "clinical",
             "version_number": tv.version_number,
             "created_at": tv.created_at.isoformat() if tv.created_at else None,
+            "id_short": tv.id[:8] if tv.id else None,
         }
+
+    def template_version_public_dict(self) -> dict | None:
+        """Lightweight clinical template version metadata for API (no full schema dump)."""
+        return self._template_version_meta(self.template_version)
+
+    def patient_template_version_public_dict(self) -> dict | None:
+        """Lightweight patient-facing template version metadata."""
+        return self._template_version_meta(self.patient_template_version)
 
     def to_dict_full(self) -> dict:
         """Full representation including nested transcript, summary, audio, patient."""
         data = self.to_dict()
         data["template_version"] = self.template_version_public_dict()
+        data["patient_template_version"] = self.patient_template_version_public_dict()
         if self.transcript:
             data["transcript"] = self.transcript.to_dict_full()
         if self.summary:
@@ -119,7 +141,7 @@ class Conversation(db.Model):
         if self.audio_file:
             data["audio_file"] = self.audio_file.to_dict()
         if self.patient:
-            data["patient"] = self.patient.to_dict()
+            data["patient"] = self.patient.to_dict_with_stats()
         return data
 
 
