@@ -106,3 +106,36 @@ def session_diarize():
 
     # ── Path 3: nothing available ────────────────────────────────────────────
     return jsonify({"segments": segments, "message": "No diarization method available"}), 200
+
+
+@sessions_bp.route("/api/session/correction", methods=["POST"])
+@optional_auth
+def log_correction():
+    """
+    Log a live-session speaker correction made by the doctor.
+    Corrections are stored for future model improvement — not used to update
+    the transcript in real time (the frontend handles that locally).
+
+    Body:
+      session_id  — the live session UUID
+      action      — 'doctor' | 'patient' | 'remove'
+    """
+    data       = request.get_json() or {}
+    session_id = (data.get("session_id") or "").strip()
+    action     = (data.get("action")     or "").strip()
+
+    if action not in ("doctor", "patient", "remove"):
+        return jsonify({"error": "action must be doctor | patient | remove"}), 400
+
+    print(f"[correction] session={session_id[:8] if session_id else '?'} action={action}")
+
+    # Persist to DB when available — simple audit log entry
+    from config import Config
+    if Config.DATABASE_URL and session_id:
+        try:
+            from utils.audit import log_action
+            log_action("speaker_correction", "conversation", session_id, {"action": action})
+        except Exception:
+            pass  # non-critical — correction is already applied in the frontend
+
+    return jsonify({"logged": True}), 200

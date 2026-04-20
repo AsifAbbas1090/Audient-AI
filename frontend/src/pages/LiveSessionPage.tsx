@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Square, Clock, Download, Trash2, CheckCircle2,
@@ -11,7 +11,7 @@ import { Button }        from '../components/ui/Button'
 import { Card }          from '../components/ui/Card'
 import { Waveform }      from '../components/visual/Waveform'
 import { RecordButton }  from '../components/visual/RecordButton'
-import { SpeakerBubble } from '../components/visual/SpeakerBubble'
+import { SpeakerBubble, isPatientSpeakerLabel, isThirdSpeakerLabel } from '../components/visual/SpeakerBubble'
 import { VocalPromptsIndicator } from '../components/VocalPromptsIndicator'
 import { useVocalPrompts } from '../hooks/useVocalPrompts'
 import { speak, primeAudio } from '../lib/vocalAudio'
@@ -27,6 +27,18 @@ function formatTime(sec: number): string {
   const m = Math.floor(sec / 60).toString().padStart(2, '0')
   const s = Math.floor(sec % 60).toString().padStart(2, '0')
   return `${m}:${s}`
+}
+
+// ── Typing bubble — shown inside each transcript column while a chunk is in-flight ──
+function TypingBubble({ color = 'brand' }: { color?: 'brand' | 'emerald' }) {
+  const base = color === 'emerald' ? 'bg-emerald-400' : 'bg-brand-400'
+  return (
+    <div className="flex items-center gap-1 px-3 py-2 rounded-2xl bg-white/5 light:bg-slate-100 w-fit">
+      <span className={`h-1.5 w-1.5 rounded-full ${base} animate-bounce [animation-delay:-0.3s]`} />
+      <span className={`h-1.5 w-1.5 rounded-full ${base} animate-bounce [animation-delay:-0.15s]`} />
+      <span className={`h-1.5 w-1.5 rounded-full ${base} animate-bounce`} />
+    </div>
+  )
 }
 
 // ── Processing overlay ────────────────────────────────────────────────────────
@@ -167,15 +179,31 @@ export default function LiveSessionPage() {
       .catch(() => {})
   }, [])
 
+  // ── Scenario detection state ────────────────────────────────────────────────
+  const [telehealthMode,       setTelehealthMode]       = useState(false)
+  const [dualMicDismissed,     setDualMicDismissed]     = useState(false)
+  const [thirdSpeakerDetected, setThirdSpeakerDetected] = useState(false)
+  const [thirdSpeakerLabel,    setThirdSpeakerLabel]    = useState('Other')
+  const [showThirdColumn,      setShowThirdColumn]       = useState(false)
+  const [noisyEnvironment,     setNoisyEnvironment]     = useState(false)
+
   const timerRef    = useRef<ReturnType<typeof setInterval> | null>(null)
   const pollRef     = useRef<ReturnType<typeof setInterval> | null>(null)
   const savedIdRef  = useRef<string | null>(null)
   const elapsedRef  = useRef(0)
-  const bottomRef   = useRef<HTMLDivElement>(null)
-  const isSavingRef = useRef(false)
+  const clinBottomRef   = useRef<HTMLDivElement>(null)
+  const patBottomRef    = useRef<HTMLDivElement>(null)
+  const thirdBottomRef  = useRef<HTMLDivElement>(null)
+  const prevClinLen     = useRef(0)
+  const prevPatLen      = useRef(0)
+  const prevThirdLen    = useRef(0)
+  const isSavingRef     = useRef(false)
+  // Ref so callbacks can read fresh values without stale closures
+  const patientDeviceIdRef = useRef(patientDeviceId)
+  const noisyCountRef      = useRef(0)
 
   useEffect(() => { elapsedRef.current = elapsed }, [elapsed])
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [segments])
+  useEffect(() => { patientDeviceIdRef.current = patientDeviceId }, [patientDeviceId])
 
   useEffect(() => {
     if (!parentSessionId) return
@@ -189,16 +217,36 @@ export default function LiveSessionPage() {
     doctorDeviceId:  doctorDeviceId  || undefined,
     patientDeviceId: patientDeviceId || undefined,
 
+    onChunkSent: useCallback(() => {
+      setProcessing(true)  // show typing bubble the instant audio leaves the browser
+    }, []),
+
     onTranscriptUpdate: useCallback((newSegs: Segment[]) => {
       setProcessing(false)
+      // Dual-channel (separate mics) → labels are exact, never provisional
+      const isDualChannel = !!patientDeviceIdRef.current
+      const isProvisional = !isDualChannel && elapsedRef.current < 30
       setSegments(prev => {
-        const next = [...prev, ...newSegs]
+        const next = [...prev, ...newSegs.map(s => ({ ...s, provisional: isProvisional }))]
         session.setSegmentsRef(next)
         return next
       })
+      // Noisy environment: if every segment is very short, audio quality may be poor
+      const totalWords = newSegs.reduce((n, s) => n + s.text.trim().split(/\s+/).filter(Boolean).length, 0)
+      if (totalWords < 3) {
+        noisyCountRef.current++
+        if (noisyCountRef.current >= 3) setNoisyEnvironment(true)
+      } else {
+        noisyCountRef.current = 0
+        setNoisyEnvironment(false)
+      }
     }, []),  // eslint-disable-line react-hooks/exhaustive-deps
 
     onDiarizeUpdate: useCallback((rawSegs) => {
+      const stabilized = elapsedRef.current >= 30
+      // Detect a third voice (family member, nurse, etc.)
+      const hasThird = rawSegs.some(s => isThirdSpeakerLabel(s.speaker ?? ''))
+      if (hasThird) setThirdSpeakerDetected(true)
       setSegments(prev => {
         let idx = 0
         return prev.map(seg => {
@@ -206,10 +254,14 @@ export default function LiveSessionPage() {
           const labeled = rawSegs[idx]
           if (!labeled) return seg
           idx++
-          return { ...seg, speaker: labeled.speaker ?? seg.speaker }
+          return {
+            ...seg,
+            speaker: labeled.speaker ?? seg.speaker,
+            ...(stabilized ? { provisional: false } : {}),
+          }
         })
       })
-    }, []),
+    }, []),  // eslint-disable-line react-hooks/exhaustive-deps
 
     onLanguage: useCallback((lang: string) => {
       console.log('[Live] detected language:', lang)
@@ -321,6 +373,11 @@ export default function LiveSessionPage() {
     setSegments([])
     setElapsed(0)
     setStatusMsg(null)
+    setProcessing(true)
+    setThirdSpeakerDetected(false)
+    setShowThirdColumn(false)
+    setNoisyEnvironment(false)
+    noisyCountRef.current = 0
     await startSession(continueSessionId ?? undefined)
     refreshDevices()
     toast(continueSessionId ? 'Follow-up session started' : 'Session started — recording', 'success')
@@ -333,6 +390,41 @@ export default function LiveSessionPage() {
   const handleClear = useCallback(() => {
     setSegments([]); setStatusMsg(null); setElapsed(0); setSavedId(null); isSavingRef.current = false
   }, [])
+
+  // ── Scenario handlers ─────────────────────────────────────────────────────
+  const handleAutoDualMic = useCallback(() => {
+    const second = audioDevices.find(d => d.deviceId !== 'default' && d.deviceId !== doctorDeviceId)
+    if (second) setPatientDeviceId(second.deviceId)
+    setDualMicDismissed(true)
+  }, [audioDevices, doctorDeviceId])
+
+  const handleTelehealthToggle = useCallback((enabled: boolean) => {
+    setTelehealthMode(enabled)
+    if (enabled) {
+      const second = audioDevices.find(d => d.deviceId !== 'default' && d.deviceId !== doctorDeviceId)
+      if (second) setPatientDeviceId(second.deviceId)
+    } else {
+      setPatientDeviceId('')
+    }
+  }, [audioDevices, doctorDeviceId])
+
+  const handleCorrection = useCallback((segId: number, action: 'doctor' | 'patient' | 'remove') => {
+    setSegments(prev => {
+      if (action === 'remove') return prev.filter(s => s.id !== segId)
+      return prev.map(s => s.id !== segId ? s : {
+        ...s,
+        speaker:     action === 'doctor' ? 'Speaker 1' : 'Patient',
+        provisional: false,
+      })
+    })
+    // Fire-and-forget — logs correction for future model improvement
+    if (savedIdRef.current || sessionId) {
+      api.post('/api/session/correction', {
+        session_id: savedIdRef.current ?? sessionId,
+        action,
+      }).catch(() => {})
+    }
+  }, [sessionId])
 
   const handleToggle = useCallback(async () => {
     if (!active)       await handleStart()
@@ -382,6 +474,43 @@ export default function LiveSessionPage() {
   const speakerSet    = [...new Set(segments.map(s => s.speaker))]
   const wordCount     = segments.reduce((n, s) => n + s.text.split(/\s+/).length, 0)
   const hasLiveFields = Object.values(liveFields).some(v => v && v !== 'null')
+  const isDualChannel = !!patientDeviceId
+  // Settling banner: first 30s, single mic only — dual-channel labels are always exact
+  const isSettling       = active && !paused && elapsed < 30 && !isDualChannel
+  const settlingSecsLeft = Math.max(0, 30 - elapsed)
+
+  const clinicianSegments = useMemo(
+    () => segments.filter(s => !isPatientSpeakerLabel(s.speaker) && !(showThirdColumn && isThirdSpeakerLabel(s.speaker))),
+    [segments, showThirdColumn],
+  )
+  const patientSegments = useMemo(
+    () => segments.filter(s => isPatientSpeakerLabel(s.speaker)),
+    [segments],
+  )
+  const thirdSpeakerSegments = useMemo(
+    () => showThirdColumn ? segments.filter(s => isThirdSpeakerLabel(s.speaker)) : [],
+    [segments, showThirdColumn],
+  )
+
+  /** Scroll only the column that gained lines so new speech stays visible. */
+  useEffect(() => {
+    const cn = clinicianSegments.length
+    const pn = patientSegments.length
+    const tn = thirdSpeakerSegments.length
+    if (cn > prevClinLen.current)  clinBottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+    if (pn > prevPatLen.current)   patBottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+    if (tn > prevThirdLen.current) thirdBottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+    prevClinLen.current  = cn
+    prevPatLen.current   = pn
+    prevThirdLen.current = tn
+  }, [clinicianSegments.length, patientSegments.length, thirdSpeakerSegments.length])
+
+  useEffect(() => {
+    if (segments.length === 0) {
+      prevClinLen.current = 0
+      prevPatLen.current = 0
+    }
+  }, [segments.length])
 
   // ── Render ───────────────────────────────────────────────────────────────────
   return (
@@ -479,124 +608,277 @@ export default function LiveSessionPage() {
           </div>
         )}
 
-        {/* ── Body ────────────────────────────────────────────────────────── */}
-        <div className="flex-1 overflow-hidden flex gap-6 p-6">
+        {/* ── Body: controls + side-by-side transcript + sidebar ───────── */}
+        <div className="flex-1 overflow-hidden flex flex-col lg:flex-row gap-6 p-6 min-h-0">
 
-          {/* ── Left: controls + transcript ────────────────────────────── */}
-          <div className="flex-1 flex flex-col gap-4 min-w-0">
+          <div className="flex-1 flex flex-col gap-4 min-w-0 min-h-0">
 
-            {/* Controls */}
-            <Card variant="elevated" className="p-6">
-              <div className="flex flex-col items-center gap-5">
-                <RecordButton state={recordState} onClick={handleToggle} size="lg" />
-                <div className="w-full"><Waveform active={active && !paused} /></div>
-
-                {active && (
-                  <Button variant="destructive" size="sm" onClick={handleStop} disabled={saving}>
-                    <Square size={13} className="mr-1.5 fill-current" />
-                    End Session
-                  </Button>
-                )}
-
-                {!active && !saving && (
-                  <div className="w-full grid grid-cols-2 gap-3 pt-2 border-t border-white/6">
-                    <DeviceSelect
-                      icon={<Mic size={10} className="text-brand-400" />}
-                      label="Doctor mic"
-                      devices={audioDevices}
-                      value={doctorDeviceId}
-                      onChange={setDoctorDeviceId}
-                      placeholder="Default microphone"
-                    />
-                    <DeviceSelect
-                      icon={<User size={10} className="text-emerald-400" />}
-                      label="Patient mic (optional)"
-                      devices={audioDevices}
-                      value={patientDeviceId}
-                      onChange={setPatientDeviceId}
-                      placeholder="None (single mic)"
-                    />
+            {/* One live panel: mic + waveform, then transcript directly underneath */}
+            <Card variant="elevated" className="flex flex-col flex-1 min-h-0 overflow-hidden p-0">
+              <div className="shrink-0 p-4 lg:p-5 border-b border-white/8 light:border-slate-200/80">
+                <div className="flex flex-col lg:flex-row lg:items-stretch gap-4 lg:gap-6">
+                  <div className="flex flex-col items-center justify-center gap-3 shrink-0 lg:w-52">
+                    <RecordButton state={recordState} onClick={handleToggle} size="lg" />
+                    {active && (
+                      <Button variant="destructive" size="sm" onClick={handleStop} disabled={saving}>
+                        <Square size={13} className="mr-1.5 fill-current" />
+                        End Session
+                      </Button>
+                    )}
                   </div>
-                )}
-
-                {permissionError && (
-                  <p className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2.5 w-full text-center">
-                    {permissionError}
-                  </p>
-                )}
-                {statusMsg && (
-                  <p className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-2 w-full text-center flex items-center gap-2 justify-center">
-                    <AlertCircle size={13} />
-                    {statusMsg}
-                  </p>
-                )}
-                {!connected && (
-                  <p className="text-xs text-slate-500 text-center">
-                    Connecting to server… transcription begins once connected.
-                  </p>
-                )}
-              </div>
-            </Card>
-
-            {/* Transcript */}
-            <Card variant="elevated" className="flex-1 flex flex-col min-h-0">
-              <div className="shrink-0 flex items-center justify-between px-5 py-4 border-b border-white/8">
-                <div className="flex items-center gap-3">
-                  <h2 className="font-semibold text-white text-sm">Transcript</h2>
-                  {processing && active && <Badge variant="default" dot>Live</Badge>}
-                  {saving     && <Badge variant="processing" dot>Processing</Badge>}
-                </div>
-
-                {speakerSet.length > 0 && (
-                  <div className="flex items-center gap-3">
-                    {speakerSet.map(sp => (
-                      <div key={sp} className="flex items-center gap-1.5">
-                        <div className={`h-2 w-2 rounded-full ${sp === 'Patient' ? 'bg-emerald-400' : sp.includes('2') ? 'bg-emerald-400' : 'bg-brand-400'}`} />
-                        <span className="text-xs text-slate-500">{sp}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {segments.length > 0 && !active && !saving && (
-                  <div className="flex items-center gap-2">
-                    <button onClick={handleExport} className="p-1.5 rounded-lg text-slate-500 hover:text-brand-400 hover:bg-brand-500/10 transition-colors" title="Export transcript">
-                      <Download size={14} />
-                    </button>
-                    <button onClick={handleClear} className="p-1.5 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-colors" title="Clear">
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
-                {segments.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center h-full text-center py-16">
-                    <p className="text-slate-400 text-sm">
-                      {active && !paused
-                        ? 'Listening… transcript appears every 5 seconds'
-                        : 'Start a session to begin transcribing'}
-                    </p>
-                    {active && !paused && (
-                      <p className="text-xs text-slate-600 mt-2">
-                        Overlapping 6s windows → Groq Whisper → pushed back live
+                  <div className="flex-1 flex flex-col justify-center gap-3 min-w-0">
+                    <Waveform active={active && !paused} />
+                    {!connected && (
+                      <p className="text-xs text-slate-500 text-center lg:text-left">
+                        Connecting to server… transcription starts once connected.
+                      </p>
+                    )}
+                    {permissionError && (
+                      <p className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2.5 text-center">
+                        {permissionError}
+                      </p>
+                    )}
+                    {statusMsg && (
+                      <p className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-2 flex items-center gap-2 justify-center">
+                        <AlertCircle size={13} />
+                        {statusMsg}
                       </p>
                     )}
                   </div>
-                ) : (
-                  segments.map(seg => (
-                    <SpeakerBubble
-                      key={seg.id}
-                      speaker={seg.speaker}
-                      text={seg.text}
-                      timestamp={seg.start != null ? formatTime(seg.start) : undefined}
-                    />
-                  ))
+                </div>
+
+                {!active && !saving && (
+                  <div className="w-full flex flex-col gap-3 mt-4 pt-4 border-t border-white/6 light:border-slate-200/80">
+                    {/* Auto dual-mic banner — shown when 2+ mics exist and patient mic not yet assigned */}
+                    {audioDevices.length >= 2 && !patientDeviceId && !dualMicDismissed && (
+                      <div className="flex items-center gap-3 px-3 py-2 rounded-xl bg-brand-500/8 border border-brand-500/20 text-[11px]">
+                        <Mic size={13} className="text-brand-400 shrink-0" />
+                        <span className="text-slate-300 flex-1">2 mics detected — assign one as patient mic for instant accurate labels?</span>
+                        <button
+                          onClick={handleAutoDualMic}
+                          className="text-brand-400 font-semibold hover:text-brand-300 transition-colors whitespace-nowrap"
+                        >
+                          Yes, auto-assign
+                        </button>
+                        <button
+                          onClick={() => setDualMicDismissed(true)}
+                          className="text-slate-600 hover:text-slate-400 transition-colors"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    )}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <DeviceSelect
+                        icon={<Mic size={10} className="text-brand-400" />}
+                        label="Doctor mic"
+                        devices={audioDevices}
+                        value={doctorDeviceId}
+                        onChange={setDoctorDeviceId}
+                        placeholder="Default microphone"
+                      />
+                      <DeviceSelect
+                        icon={<User size={10} className="text-emerald-400" />}
+                        label={telehealthMode ? 'Patient mic (telehealth)' : 'Patient mic (optional)'}
+                        devices={audioDevices}
+                        value={patientDeviceId}
+                        onChange={setPatientDeviceId}
+                        placeholder="None (single mic)"
+                      />
+                    </div>
+                    {/* Telehealth mode toggle */}
+                    <label className="flex items-center gap-2.5 cursor-pointer w-fit">
+                      <div
+                        onClick={() => handleTelehealthToggle(!telehealthMode)}
+                        className={`relative w-8 h-4 rounded-full transition-colors ${telehealthMode ? 'bg-brand-500' : 'bg-white/10'}`}
+                      >
+                        <span className={`absolute top-0.5 left-0.5 h-3 w-3 rounded-full bg-white transition-transform ${telehealthMode ? 'translate-x-4' : 'translate-x-0'}`} />
+                      </div>
+                      <span className="text-[11px] text-slate-400 select-none">I'm in a telehealth call (uses separate audio tracks)</span>
+                    </label>
+                  </div>
                 )}
-                <div ref={bottomRef} />
+              </div>
+
+              {/* Noisy environment banner */}
+              {noisyEnvironment && active && (
+                <div className="shrink-0 flex items-center gap-2 px-4 py-2 bg-amber-500/8 border-b border-amber-500/20 text-[11px] text-amber-400">
+                  <AlertCircle size={12} className="shrink-0" />
+                  Noisy environment detected — speaker labels may need review
+                  <button onClick={() => setNoisyEnvironment(false)} className="ml-auto text-amber-600 hover:text-amber-400">✕</button>
+                </div>
+              )}
+              {/* Third speaker banner */}
+              {thirdSpeakerDetected && !showThirdColumn && (
+                <div className="shrink-0 flex items-center gap-2 px-4 py-2 bg-amber-500/8 border-b border-amber-500/20 text-[11px] text-amber-300">
+                  <User size={12} className="shrink-0" />
+                  Third speaker detected
+                  <input
+                    value={thirdSpeakerLabel}
+                    onChange={e => setThirdSpeakerLabel(e.target.value)}
+                    className="mx-1 px-1.5 py-0.5 bg-white/5 border border-white/10 rounded text-amber-200 text-[11px] w-24"
+                    placeholder="label (e.g. Nurse)"
+                  />
+                  <button
+                    onClick={() => setShowThirdColumn(true)}
+                    className="font-semibold text-amber-300 hover:text-amber-100 transition-colors"
+                  >
+                    Show column
+                  </button>
+                  <button onClick={() => setThirdSpeakerDetected(false)} className="ml-auto text-amber-700 hover:text-amber-400">✕</button>
+                </div>
+              )}
+
+              <div className={`flex-1 min-h-0 grid grid-cols-1 ${showThirdColumn ? 'lg:grid-cols-3' : 'lg:grid-cols-2'} lg:divide-x divide-white/8 light:divide-slate-200/80`}>
+                {/* Clinician column */}
+                <div className="flex flex-col min-h-[min(42vh,22rem)] lg:min-h-[min(52vh,36rem)]">
+                  <div className="shrink-0 flex items-center justify-between px-4 py-2.5 border-b border-white/8 light:border-slate-200/80 bg-white/[0.02] light:bg-slate-50/50">
+                    <div className="flex items-center gap-2">
+                      <h2 className="font-semibold text-white light:text-slate-900 text-sm">Clinician</h2>
+                      {processing && active && <Badge variant="default" dot className="text-[10px]">Live</Badge>}
+                      {saving && <Badge variant="processing" dot className="text-[10px]">Saving</Badge>}
+                    </div>
+                    <span className="text-[10px] text-slate-500 tabular-nums">{clinicianSegments.length}</span>
+                  </div>
+                  {/* Settling banner — shown for the first 30s while diarization model learns voices */}
+                  {isSettling && (
+                    <div className="shrink-0 flex items-center gap-1.5 px-4 py-1.5 bg-slate-500/8 border-b border-slate-500/15 text-[10px] text-slate-500">
+                      <span className="h-1.5 w-1.5 rounded-full bg-slate-500 animate-pulse shrink-0" />
+                      Labels settling — improves in {settlingSecsLeft}s · tap any line to correct
+                    </div>
+                  )}
+                  <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2.5">
+                    {clinicianSegments.length === 0 && !(active && !paused && processing) ? (
+                      <p className="text-slate-500 text-xs text-center py-6">
+                        {active && !paused ? 'Listening…' : '—'}
+                      </p>
+                    ) : (
+                      clinicianSegments.map(seg => (
+                        <SpeakerBubble
+                          key={seg.id}
+                          speaker={seg.speaker}
+                          text={seg.text}
+                          timestamp={seg.start != null ? formatTime(seg.start) : undefined}
+                          compact
+                          provisional={seg.provisional}
+                          editable={active}
+                          onCorrect={action => handleCorrection(seg.id, action)}
+                        />
+                      ))
+                    )}
+                    {active && !paused && processing && <TypingBubble color="brand" />}
+                    <div ref={clinBottomRef} className="h-px shrink-0" aria-hidden />
+                  </div>
+                </div>
+
+                {/* Patient column */}
+                <div className="flex flex-col min-h-[min(42vh,22rem)] lg:min-h-[min(52vh,36rem)] border-t lg:border-t-0 border-white/8 light:border-slate-200/80">
+                  <div className="shrink-0 flex items-center justify-between px-4 py-2.5 border-b border-white/8 light:border-slate-200/80 bg-white/[0.02] light:bg-slate-50/50">
+                    <div className="flex items-center gap-2">
+                      <h2 className="font-semibold text-white light:text-slate-900 text-sm">Patient</h2>
+                      {patientDeviceId && (
+                        <span className="text-[10px] text-emerald-400/90 font-medium">Dedicated mic</span>
+                      )}
+                    </div>
+                    <span className="text-[10px] text-slate-500 tabular-nums">{patientSegments.length}</span>
+                  </div>
+                  {/* Mirror the settling banner so both columns stay in sync */}
+                  {isSettling && (
+                    <div className="shrink-0 flex items-center gap-1.5 px-4 py-1.5 bg-slate-500/8 border-b border-slate-500/15 text-[10px] text-slate-500">
+                      <span className="h-1.5 w-1.5 rounded-full bg-slate-500 animate-pulse shrink-0" />
+                      Labels settling — improves in {settlingSecsLeft}s · tap any line to correct
+                    </div>
+                  )}
+                  <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2.5">
+                    {patientSegments.length === 0 && !(active && !paused && processing) ? (
+                      <p className="text-slate-500 text-xs text-center py-6">
+                        {active && !paused
+                          ? 'Patient audio appears here (Speaker 2 / Patient label or second mic).'
+                          : '—'}
+                      </p>
+                    ) : (
+                      patientSegments.map(seg => (
+                        <SpeakerBubble
+                          key={seg.id}
+                          speaker={seg.speaker}
+                          text={seg.text}
+                          timestamp={seg.start != null ? formatTime(seg.start) : undefined}
+                          compact
+                          provisional={seg.provisional}
+                          editable={active}
+                          onCorrect={action => handleCorrection(seg.id, action)}
+                        />
+                      ))
+                    )}
+                    {active && !paused && processing && <TypingBubble color="emerald" />}
+                    <div ref={patBottomRef} className="h-px shrink-0" aria-hidden />
+                  </div>
+                </div>
+
+                {/* ── Third speaker column ──────────────────────────────── */}
+                {showThirdColumn && (
+                  <div className="flex flex-col min-h-[min(42vh,22rem)] lg:min-h-[min(52vh,36rem)] border-t lg:border-t-0 border-white/8 light:border-slate-200/80">
+                    <div className="shrink-0 flex items-center justify-between px-4 py-2.5 border-b border-white/8 light:border-slate-200/80 bg-amber-500/5">
+                      <div className="flex items-center gap-2">
+                        <h2 className="font-semibold text-amber-300 text-sm">{thirdSpeakerLabel}</h2>
+                        <span className="text-[10px] text-amber-600 font-medium">3rd speaker</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-slate-500 tabular-nums">{thirdSpeakerSegments.length}</span>
+                        <button
+                          onClick={() => setShowThirdColumn(false)}
+                          className="text-slate-600 hover:text-slate-400 text-[10px] transition-colors"
+                        >
+                          hide
+                        </button>
+                      </div>
+                    </div>
+                    <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2.5">
+                      {thirdSpeakerSegments.length === 0 ? (
+                        <p className="text-slate-500 text-xs text-center py-6">
+                          {active && !paused ? `Waiting for ${thirdSpeakerLabel} speech…` : '—'}
+                        </p>
+                      ) : (
+                        thirdSpeakerSegments.map(seg => (
+                          <SpeakerBubble
+                            key={seg.id}
+                            speaker={thirdSpeakerLabel}
+                            text={seg.text}
+                            timestamp={seg.start != null ? formatTime(seg.start) : undefined}
+                            compact
+                            editable={active}
+                            onCorrect={action => handleCorrection(seg.id, action)}
+                          />
+                        ))
+                      )}
+                      <div ref={thirdBottomRef} className="h-px shrink-0" aria-hidden />
+                    </div>
+                  </div>
+                )}
               </div>
             </Card>
+
+            {segments.length > 0 && !active && !saving && (
+              <div className="flex justify-end gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleExport}
+                  className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-brand-400 px-2 py-1 rounded-lg hover:bg-brand-500/10 transition-colors"
+                >
+                  <Download size={14} />
+                  Export transcript
+                </button>
+                <button
+                  type="button"
+                  onClick={handleClear}
+                  className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-red-400 px-2 py-1 rounded-lg hover:bg-red-500/10 transition-colors"
+                >
+                  <Trash2 size={14} />
+                  Clear
+                </button>
+              </div>
+            )}
+
           </div>
 
           {/* ── Right sidebar ───────────────────────────────────────────── */}

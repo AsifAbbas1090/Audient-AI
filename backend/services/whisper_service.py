@@ -21,10 +21,16 @@ _MEDICAL_PROMPT = (
 )
 
 
+def _is_english(lang: Optional[str]) -> bool:
+    """True when the language hint indicates English audio (skip translation)."""
+    return bool(lang) and lang.lower().startswith("en")
+
+
 def transcribe(
     audio_path: str,
     task: str = "translate",
     language_hint: Optional[str] = None,
+    context: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Transcribe audio using Groq Whisper API.
@@ -36,6 +42,9 @@ def transcribe(
         language_hint: ISO-639-1 code of the audio language (e.g. 'en', 'ur').
                        Skips Whisper's language detection pass — faster + more
                        accurate when the language is already known.
+        context:       Last ~300 chars of prior transcript text. Appended to the
+                       medical prompt so Whisper continues naturally across chunk
+                       boundaries instead of starting cold each time.
 
     Returns:
         {
@@ -58,13 +67,24 @@ def transcribe(
 
     filename = os.path.basename(audio_path)
 
+    # Build prompt: medical vocab bias + recent context for cross-chunk continuity
+    prompt = _MEDICAL_PROMPT
+    if context:
+        # Whisper uses the prompt as prior context — appending the last sentence
+        # prevents it from starting cold and mis-transcribing the first word.
+        prompt = f"{_MEDICAL_PROMPT} {context[-200:].strip()}"
+
+    # Auto-switch: translating English → English adds no value and increases latency
+    if task == "translate" and _is_english(language_hint):
+        task = "transcribe"
+
     # Common kwargs improve accuracy on every call
     common_kwargs = dict(
         file             = (filename, audio_bytes),
         model            = Config.GROQ_TRANSCRIBE_MODEL,
         response_format  = "verbose_json",
         temperature      = 0,            # deterministic output
-        prompt           = _MEDICAL_PROMPT,
+        prompt           = prompt,
     )
 
     # Only the transcriptions endpoint accepts a language hint

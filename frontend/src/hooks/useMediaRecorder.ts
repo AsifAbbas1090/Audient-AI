@@ -7,8 +7,10 @@
  *   MediaRecorder fires ondataavailable every `timeslice` ms without stopping.
  *   Chunks accumulate in a rolling buffer (max 240 entries ≈ 2 min at 500 ms).
  *   Use getWindowBlob(n) to assemble a valid WebM from [headerChunk + last n sub-chunks].
- *   This is the mode used by useLiveSession for overlapping windows:
- *     getWindowBlob(12) = header + last 12 × 500 ms = 5 s audio + 1 s overlap from prev window.
+ *   useLiveSession uses timeslice=500ms and calls getWindowBlob(8) every 4 s —
+ *   i.e. 8 × 500 ms = 4 s of audio per Whisper request, NO stop/restart gaps.
+ *   setChunks is NOT updated on every 500 ms tick to avoid per-tick re-renders;
+ *   it is set once in onstop to signal that recording has stopped and data is ready.
  *
  * LEGACY MODE (no timeslice):
  *   MediaRecorder stops/restarts on takeChunk() — each call produces a self-contained WebM.
@@ -77,10 +79,14 @@ export function useMediaRecorder(options: UseMediaRecorderOptions = {}) {
       }
       rawBufferRef.current.push(e.data)
       if (rawBufferRef.current.length > MAX_BUFFER) rawBufferRef.current.shift()
-      setChunks(prev => [...prev, e.data])
+      // Do NOT call setChunks here — it would fire every 500 ms and cause
+      // a re-render of the entire live session page on every tick.
+      // setChunks is called once in onstop to signal data is ready.
     }
 
     recorder.onstop = () => {
+      // Signal to useLiveSession's useEffect that recording stopped with data.
+      if (rawBufferRef.current.length > 0) setChunks([new Blob()])
       streamRef.current?.getTracks().forEach(t => t.stop())
       streamRef.current = null
     }
@@ -180,13 +186,12 @@ export function useMediaRecorder(options: UseMediaRecorderOptions = {}) {
 
   /**
    * Get a blob for the final/full recording.
-   * Timeslice mode: last 20 sub-chunks (≈10 s) to avoid multi-megabyte blobs.
+   * Timeslice mode: entire rolling buffer (up to 2 min) — used for audio file upload.
    * Legacy mode: all chunks accumulated since last start().
    */
   const getBlob = (overrideMime?: string): Blob | null => {
     if (timeslice) {
-      // Return the last ~10 s for the final-chunk send on session stop
-      return getWindowBlob(20)
+      return getWindowBlob(rawBufferRef.current.length)
     }
     if (!chunks.length) return null
     return new Blob(chunks, { type: overrideMime ?? mimeType })
@@ -200,7 +205,10 @@ export function useMediaRecorder(options: UseMediaRecorderOptions = {}) {
     if (timeslice) {
       return Promise.resolve(getWindowBlob(10))
     }
-    if (!recording || mediaRecorderRef.current?.state === 'inactive') {
+    // Use the live MediaRecorder state (a ref), not the React `recording` state.
+    // The React state is stale inside the setInterval closure — the recorder may
+    // have already started even though the captured `recording` value is still false.
+    if (mediaRecorderRef.current?.state !== 'recording') {
       return Promise.resolve(null)
     }
     return new Promise(resolve => {

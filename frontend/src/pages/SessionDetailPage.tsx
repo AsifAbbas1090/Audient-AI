@@ -168,11 +168,6 @@ function formatRelative(iso: string): string {
   return `${Math.floor(hrs / 24)}d ago`
 }
 
-function templateVersionShort(tv: TemplateVersionInfo | null | undefined): string {
-  if (!tv?.id) return '—'
-  return (tv.id_short ?? tv.id.slice(0, 8)) || '—'
-}
-
 const statusConfig = {
   complete:   { variant: 'success'  as const, icon: <CheckCircle2 size={13} /> },
   processing: { variant: 'warning'  as const, icon: <Loader2 size={13} className="animate-spin" /> },
@@ -923,69 +918,34 @@ export default function SessionDetailPage() {
               {/* PDF template versions locked at session time (audit) */}
               {isOwner && (
                 <Card variant="elevated" className="p-5">
-                  <div className="flex items-center gap-2 mb-3">
+                  <div className="flex items-center gap-2 mb-2">
                     <LayoutTemplate size={16} className="text-brand-400 shrink-0" />
-                    <h2 className="font-semibold text-white light:text-slate-900 text-sm">PDF template snapshot</h2>
+                    <h2 className="font-semibold text-white light:text-slate-900 text-sm">Templates for this visit</h2>
                   </div>
-                  <div className="space-y-3 text-sm">
+                  <p className="text-xs text-slate-500 light:text-slate-600 mb-3">
+                    The PDF buttons above use these template versions from when the session was recorded.
+                  </p>
+                  <div className="space-y-2 text-sm">
                     <div className="rounded-xl bg-white/4 light:bg-slate-50/90 border border-white/10 light:border-slate-200 px-3 py-2.5">
-                      <div className="flex items-center justify-between gap-2 mb-1">
-                        <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide">
-                          Clinical note PDF
-                        </span>
-                        <Link to="/templates" className="text-[11px] text-brand-400 hover:text-brand-300 shrink-0">
-                          Templates →
-                        </Link>
-                      </div>
+                      <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-1">Clinical PDF</p>
                       {conv.template_version ? (
-                        <>
-                          <p className="text-slate-200">
-                            <span className="font-mono text-xs text-slate-400" title={conv.template_version.id}>
-                              {templateVersionShort(conv.template_version)}
-                            </span>
-                            {' · '}
-                            {conv.template_version.template_name ?? 'Clinical template'} · v{conv.template_version.version_number}
-                          </p>
-                          {conv.template_version.created_at && (
-                            <p className="text-[11px] text-slate-600 mt-1">
-                              Version timestamp {formatDate(conv.template_version.created_at)}
-                            </p>
-                          )}
-                        </>
+                        <p className="text-slate-200 light:text-slate-800">
+                          {conv.template_version.template_name ?? 'Clinical template'}
+                          <span className="text-slate-500"> · v{conv.template_version.version_number}</span>
+                        </p>
                       ) : (
                         <p className="text-slate-500 text-xs">Not captured for this session.</p>
                       )}
                     </div>
                     <div className="rounded-xl bg-white/4 light:bg-slate-50/90 border border-white/10 light:border-slate-200 px-3 py-2.5">
-                      <div className="flex items-center justify-between gap-2 mb-1">
-                        <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide">
-                          Patient-facing PDF
-                        </span>
-                        <Link
-                          to="/templates?purpose=patient_facing"
-                          className="text-[11px] text-brand-400 hover:text-brand-300 shrink-0"
-                        >
-                          Patient template →
-                        </Link>
-                      </div>
+                      <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-1">Patient-facing PDF</p>
                       {conv.patient_template_version ? (
-                        <>
-                          <p className="text-slate-200">
-                            <span className="font-mono text-xs text-slate-400" title={conv.patient_template_version.id}>
-                              {templateVersionShort(conv.patient_template_version)}
-                            </span>
-                            {' · '}
-                            {conv.patient_template_version.template_name ?? 'Patient-facing template'} · v
-                            {conv.patient_template_version.version_number}
-                          </p>
-                          {conv.patient_template_version.created_at && (
-                            <p className="text-[11px] text-slate-600 mt-1">
-                              Version timestamp {formatDate(conv.patient_template_version.created_at)}
-                            </p>
-                          )}
-                        </>
+                        <p className="text-slate-200 light:text-slate-800">
+                          {conv.patient_template_version.template_name ?? 'Patient-facing template'}
+                          <span className="text-slate-500"> · v{conv.patient_template_version.version_number}</span>
+                        </p>
                       ) : (
-                        <p className="text-slate-500 text-xs">Not captured for this session (older visit or before patient layout).</p>
+                        <p className="text-slate-500 text-xs">Not captured for this session.</p>
                       )}
                     </div>
                   </div>

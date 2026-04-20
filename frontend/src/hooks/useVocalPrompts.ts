@@ -128,9 +128,9 @@ const SpeechAPI: (new () => SR) | null =
     : null
 
 const L = {
-  info:  (...a: unknown[]) => console.log( '%c[Vocal]', 'color:#818cf8;font-weight:bold', ...a),
-  warn:  (...a: unknown[]) => console.warn('%c[Vocal]', 'color:#f59e0b;font-weight:bold', ...a),
-  error: (...a: unknown[]) => console.error('%c[Vocal]','color:#f87171;font-weight:bold', ...a),
+  info:  (..._: unknown[]) => {},
+  warn:  (..._: unknown[]) => {},
+  error: (..._: unknown[]) => {},
 }
 
 // ── Hook ──────────────────────────────────────────────────────────────────────
@@ -269,7 +269,7 @@ export function useVocalPrompts(opts: UseVocalPromptsOptions): UseVocalPromptsRe
           L.info('no wake word in any alternative — staying in watch mode')
         } else if (phaseRef.current === 'listening') {
           for (const { transcript, confidence } of alts) {
-            const prev = phaseRef.current
+            const prev: VocalPhase = phaseRef.current
             handleTranscript(transcript, confidence)
             if (phaseRef.current !== prev) return
           }

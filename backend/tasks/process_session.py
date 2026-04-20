@@ -103,6 +103,24 @@ def process_session_task(
                 except Exception as e:
                     print(f"[task] extract failed: {e}")
 
+            # Re-extract with speaker-labeled text after diarization so the LLM
+            # can distinguish patient-said vs doctor-said (better Name, EmotionalState).
+            if diar_fut and not extraction.get("error") and not extraction.get("skipped"):
+                labeled = "\n".join(
+                    f"[{s.get('speaker', 'Speaker')}] {(s.get('text') or '').strip()}"
+                    for s in segments if (s.get("text") or "").strip()
+                )
+                if labeled:
+                    try:
+                        re_ext = extract(labeled, specialty)
+                        if re_ext and not re_ext.get("error") and not re_ext.get("skipped"):
+                            for k, v in re_ext.items():
+                                if v and v != "null" and not extraction.get(k):
+                                    extraction[k] = v
+                            print(f"[task] re-extract done @ {elapsed()}")
+                    except Exception as e:
+                        print(f"[task] re-extract failed: {e}")
+
         # ── Phase 2: persist transcript ───────────────────────────────────
         if conv.transcript:
             db.session.delete(conv.transcript)

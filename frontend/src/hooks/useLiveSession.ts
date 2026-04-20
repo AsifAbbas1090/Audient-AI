@@ -1,13 +1,13 @@
 /**
- * useLiveSession — WebSocket-based live recording hook (v3).
+ * useLiveSession — WebSocket-based live recording hook (v4).
  *
- * Audio strategy (stop-restart cycle):
- *   Every CHUNK_MS the doctor (and optional patient) MediaRecorder is stopped,
- *   the accumulated blob is sent to the server as a complete valid WebM, and
- *   the recorder is immediately restarted on the same stream.  This avoids the
- *   "invalid media file" error that the sliding-window/timeslice approach caused:
- *   prepending an EBML header to mid-recording clusters produces timestamps that
- *   don't start at 0, so ffmpeg (Groq's backend) rejects the file.
+ * Audio strategy (timeslice + sliding window):
+ *   MediaRecorder runs continuously with timeslice=500 ms, accumulating sub-chunks
+ *   in a rolling ref buffer.  Every CHUNK_MS a window blob is assembled from the
+ *   last 8 sub-chunks (= 4 s of audio) and sent to Groq Whisper.  The recorder
+ *   never stops between sends — no dead gaps, no stop/restart overhead.
+ *   Each window blob is [EBML header + last 8 sub-chunks], which is a complete
+ *   valid WebM that ffmpeg/Groq can parse without timestamp issues.
  *
  * Dual-channel mic:
  *   If patientDeviceId is supplied, a second MediaRecorder runs on the patient
@@ -25,11 +25,12 @@ import { useMediaRecorder }  from './useMediaRecorder'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 export type Segment = {
-  id:      number
-  speaker: string
-  text:    string
-  start?:  number
-  end?:    number
+  id:          number
+  speaker:     string
+  text:        string
+  start?:      number
+  end?:        number
+  provisional?: boolean  // true while diarization model is still learning the voices (first 30s)
 }
 
 export type LiveFields = {
@@ -51,7 +52,8 @@ type RawSegment = {
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-const CHUNK_MS     = 5_000   // stop-restart cycle interval
+const CHUNK_MS     = 4_000   // send interval: assemble + ship a 4s window blob every 4s
+const WINDOW_SUBS  = 8       // 8 × 500ms timeslice = 4s audio per Whisper request
 const DIARIZE_MS   = 15_000  // diarize interval
 const EXTRACT_MS   = 60_000  // incremental extraction interval
 
@@ -80,6 +82,7 @@ export function useLiveSession(opts: {
   onDiarizeUpdate:    (allSegs: RawSegment[]) => void
   onLanguage?:        (lang: string) => void
   onError?:           (msg: string) => void
+  onChunkSent?:       () => void   // fires the moment audio is sent — use to show typing indicator
   doctorDeviceId?:    string   // optional: specific doctor microphone
   patientDeviceId?:   string   // optional: enables dual-channel patient mic
 }) {
@@ -100,14 +103,10 @@ export function useLiveSession(opts: {
   const extractIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const segmentsRef        = useRef<Segment[]>([])
 
-  // Guards: prevent two overlapping takeChunk() calls on the same recorder
-  const drChunkBusyRef = useRef(false)
-  const ptChunkBusyRef = useRef(false)
-
   // Two recorders: doctor (always) + patient (dual-mic only).
-  // No timeslice — legacy stop-restart mode produces valid complete WebM blobs.
-  const doctorRec  = useMediaRecorder({ mimeType: 'audio/webm' })
-  const patientRec = useMediaRecorder({ mimeType: 'audio/webm' })
+  // timeslice=500ms → continuous recording; getWindowBlob(WINDOW_SUBS) assembles each send.
+  const doctorRec  = useMediaRecorder({ mimeType: 'audio/webm', timeslice: 500 })
+  const patientRec = useMediaRecorder({ mimeType: 'audio/webm', timeslice: 500 })
 
   // ── Socket connection ────────────────────────────────────────────────────────
   const connect = useCallback(() => {
@@ -115,9 +114,12 @@ export function useLiveSession(opts: {
 
     const token  = localStorage.getItem('jwt_token')
     const socket = io(SOCKET_ORIGIN(), {
-      auth:                 { token },
-      // Prefer polling first so dev proxies reliably upgrade; then websocket.
-      transports:           ['polling', 'websocket'],
+      auth:  { token },
+      // In dev, Vite's http-proxy can't forward the Socket.IO WebSocket upgrade
+      // handshake correctly — the "Invalid frame header" error is Vite dropping the
+      // WS frame.  Polling is equally fast for local dev and has no proxy issues.
+      // In production the server serves the frontend directly so WS works fine.
+      transports:           import.meta.env.DEV ? ['polling'] : ['polling', 'websocket'],
       reconnection:         true,
       reconnectionAttempts: 5,
       reconnectionDelay:    1_000,
@@ -191,7 +193,8 @@ export function useLiveSession(opts: {
       is_final:       isFinal,
       forced_speaker: forcedSpeaker,
     })
-  }, [])
+    opts.onChunkSent?.()  // signal immediately — backend is now processing this chunk
+  }, [])  // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Diarization request ────────────────────────────────────────────────────────
   const requestDiarize = useCallback((segs: Segment[]) => {
@@ -230,32 +233,19 @@ export function useLiveSession(opts: {
   }, [])
 
   // ── Helper: start all polling intervals ───────────────────────────────────────
-  // Uses stop-restart cycle (takeChunk) — each call produces a self-contained
-  // valid WebM blob that Groq Whisper can parse without timestamp issues.
+  // Timeslice mode: getWindowBlob() is synchronous — no async, no busy guards needed.
   const _startIntervals = useCallback(() => {
-    // Doctor chunks: stop recorder → collect blob → restart → send to Groq
-    chunkIntervalRef.current = setInterval(async () => {
-      if (drChunkBusyRef.current) return   // previous cycle still in progress
-      drChunkBusyRef.current = true
-      try {
-        const blob = await doctorRec.takeChunk()
-        if (blob && blob.size >= 500) sendChunk(blob)
-      } finally {
-        drChunkBusyRef.current = false
-      }
+    // Doctor chunks: assemble last WINDOW_SUBS sub-chunks (4s) and ship to Groq
+    chunkIntervalRef.current = setInterval(() => {
+      const blob = doctorRec.getWindowBlob(WINDOW_SUBS)
+      if (blob && blob.size >= 500) sendChunk(blob)
     }, CHUNK_MS)
 
-    // Patient chunks (dual-mic) — tagged so server skips diarization
+    // Patient chunks (dual-mic) — forced_speaker tag means server skips diarization
     if (opts.patientDeviceId) {
-      patientIntervalRef.current = setInterval(async () => {
-        if (ptChunkBusyRef.current) return
-        ptChunkBusyRef.current = true
-        try {
-          const blob = await patientRec.takeChunk()
-          if (blob && blob.size >= 500) sendChunk(blob, false, 'Patient')
-        } finally {
-          ptChunkBusyRef.current = false
-        }
+      patientIntervalRef.current = setInterval(() => {
+        const blob = patientRec.getWindowBlob(WINDOW_SUBS)
+        if (blob && blob.size >= 500) sendChunk(blob, false, 'Patient')
       }, CHUNK_MS)
     }
 
@@ -303,8 +293,6 @@ export function useLiveSession(opts: {
     detectedLangRef.current = 'Unknown'
     timeOffsetRef.current   = 0
     setLiveFields({})
-    drChunkBusyRef.current  = false
-    ptChunkBusyRef.current  = false
 
     if (id) {
       setTimeout(() => {
@@ -339,8 +327,6 @@ export function useLiveSession(opts: {
 
   // ── Resume ─────────────────────────────────────────────────────────────────────
   const resumeSession = useCallback(async () => {
-    drChunkBusyRef.current = false
-    ptChunkBusyRef.current = false
     doctorRec.reset()
     await doctorRec.start(opts.doctorDeviceId)
     if (opts.patientDeviceId) {
@@ -360,18 +346,23 @@ export function useLiveSession(opts: {
     setPaused(false)
   }, [_clearIntervals, doctorRec, patientRec, opts.patientDeviceId])
 
-  // ── Final chunk + extract when doctor recording stops ─────────────────────────
-  // Sends whatever was recorded since the last takeChunk() cycle as the final blob.
+  // ── Flush remaining audio when the doctor recorder stops ─────────────────────
+  // Fires on pause AND on full stop. `active` distinguishes them:
+  //   active=true  → pause: send remaining audio, no final diarize/extract
+  //   active=false → stop:  send final audio, run diarize + extract
   useEffect(() => {
     if (doctorRec.recording || !doctorRec.chunks.length) return
+    const isFinalStop = !active
     const finish = async () => {
-      const blob = doctorRec.getBlob()
-      if (blob && blob.size >= 500) await sendChunk(blob, true)
-      requestDiarize(segmentsRef.current)
-      await runExtract()   // final extraction pass
+      const blob = doctorRec.getWindowBlob(WINDOW_SUBS)
+      if (blob && blob.size >= 500) await sendChunk(blob, isFinalStop)
+      if (isFinalStop) {
+        requestDiarize(segmentsRef.current)
+        await runExtract()
+      }
     }
     finish()
-  }, [doctorRec.recording, doctorRec.chunks])  // eslint-disable-line react-hooks/exhaustive-deps
+  }, [doctorRec.recording, doctorRec.chunks, active])  // eslint-disable-line react-hooks/exhaustive-deps
 
   // Keep segmentsRef in sync for diarize / extract calls
   const setSegmentsRef = useCallback((segs: Segment[]) => {

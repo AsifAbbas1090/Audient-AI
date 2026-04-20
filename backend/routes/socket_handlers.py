@@ -94,6 +94,10 @@ def handle_disconnect():
 # Module-level dict: { sid: { user_id, role } }
 _socket_meta: dict = {}
 
+# Rolling transcript context per session — last ~300 chars of text sent to Whisper
+# as an initial_prompt so each chunk continues naturally from the previous one.
+_session_context: dict = {}  # session_id → str
+
 
 # ── Session room ──────────────────────────────────────────────────────────────
 
@@ -148,12 +152,26 @@ def handle_audio_chunk(data):
             return  # skip Groq call for silent chunks
 
         # ── Transcribe ───────────────────────────────────────────────────
-        result   = whisper_service.transcribe(tmp_path, task="translate", language_hint=lang_hint or None)
+        # Pass prior context so Whisper continues naturally across 1-second chunks
+        # instead of starting cold and potentially mis-transcribing the first word.
+        prior_context = _session_context.get(session_id, "") if session_id else ""
+        result   = whisper_service.transcribe(
+            tmp_path,
+            task="translate",
+            language_hint=lang_hint or None,
+            context=prior_context or None,
+        )
         segments = result.get("segments", [])
         language = result.get("language", "Unknown")
 
         if not segments:
             return
+
+        # ── Update rolling context for next chunk ────────────────────────
+        if session_id:
+            new_text = " ".join(s.get("text", "").strip() for s in segments)
+            combined = f"{prior_context} {new_text}".strip()
+            _session_context[session_id] = combined[-300:]  # keep last ~300 chars
 
         # ── Dual-mic: override speaker label when forced_speaker is set ──
         # The patient mic sends chunks tagged with forced_speaker="Patient"
@@ -174,6 +192,10 @@ def handle_audio_chunk(data):
             "language": language,
             "is_final": is_final,
         })
+
+        # Free context memory when session ends
+        if is_final and session_id:
+            _session_context.pop(session_id, None)
 
     except Exception as exc:
         print(f"[WS/chunk] error: {exc}")
