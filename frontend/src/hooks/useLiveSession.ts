@@ -52,8 +52,8 @@ type RawSegment = {
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-const CHUNK_MS     = 4_000   // send interval: assemble + ship a 4s window blob every 4s
-const WINDOW_SUBS  = 8       // 8 × 500ms timeslice = 4s audio per Whisper request
+const CHUNK_MS     = 4_000   // send interval: assemble + ship a window blob every 4s
+const WINDOW_SUBS  = 10      // 10 × 500ms = 5s audio per Whisper request (1s overlap with prior send)
 const DIARIZE_MS   = 15_000  // diarize interval
 const EXTRACT_MS   = 60_000  // incremental extraction interval
 
@@ -85,6 +85,7 @@ export function useLiveSession(opts: {
   onChunkSent?:       () => void   // fires the moment audio is sent — use to show typing indicator
   doctorDeviceId?:    string   // optional: specific doctor microphone
   patientDeviceId?:   string   // optional: enables dual-channel patient mic
+  contextSeed?:       string   // optional: last ~500 chars of parent transcript for continuation sessions
 }) {
   const [connected,  setConnected]  = useState(false)
   const [sessionId,  setSessionId]  = useState<string | null>(null)
@@ -105,8 +106,9 @@ export function useLiveSession(opts: {
 
   // Two recorders: doctor (always) + patient (dual-mic only).
   // timeslice=500ms → continuous recording; getWindowBlob(WINDOW_SUBS) assembles each send.
-  const doctorRec  = useMediaRecorder({ mimeType: 'audio/webm', timeslice: 500 })
-  const patientRec = useMediaRecorder({ mimeType: 'audio/webm', timeslice: 500 })
+  // Opus at 32kbps is optimal for speech: small chunks, high intelligibility.
+  const doctorRec  = useMediaRecorder({ mimeType: 'audio/webm;codecs=opus', timeslice: 500, audioBitsPerSecond: 32_000 })
+  const patientRec = useMediaRecorder({ mimeType: 'audio/webm;codecs=opus', timeslice: 500, audioBitsPerSecond: 32_000 })
 
   // ── Socket connection ────────────────────────────────────────────────────────
   const connect = useCallback(() => {
@@ -115,11 +117,9 @@ export function useLiveSession(opts: {
     const token  = localStorage.getItem('jwt_token')
     const socket = io(SOCKET_ORIGIN(), {
       auth:  { token },
-      // In dev, Vite's http-proxy can't forward the Socket.IO WebSocket upgrade
-      // handshake correctly — the "Invalid frame header" error is Vite dropping the
-      // WS frame.  Polling is equally fast for local dev and has no proxy issues.
-      // In production the server serves the frontend directly so WS works fine.
-      transports:           import.meta.env.DEV ? ['polling'] : ['polling', 'websocket'],
+      // Vite proxies /socket.io with ws:true so WebSocket works in dev too.
+      // Start with polling for the handshake then upgrade — same behaviour in dev and prod.
+      transports:           ['polling', 'websocket'],
       reconnection:         true,
       reconnectionAttempts: 5,
       reconnectionDelay:    1_000,
@@ -274,19 +274,25 @@ export function useLiveSession(opts: {
   const startSession = useCallback(async (overrideSessionId?: string): Promise<string | null> => {
     connect()
 
-    // Create server-side session (DB row + audio accumulation slot),
-    // unless a pre-created session ID is provided (continuation mode).
+    // Register the session with the backend (creates DB row + audio accumulation slot).
+    // For continuation sessions, pass the pre-created ID and context_seed so the
+    // backend pre-loads the Whisper rolling prompt before the first chunk arrives.
     let id: string | null = overrideSessionId ?? null
-    if (!id) {
-      try {
-        const token   = localStorage.getItem('jwt_token')
-        const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-        if (token) headers['Authorization'] = `Bearer ${token}`
-        const res  = await fetch(`${API_ROOT()}/api/session/start`, { method: 'POST', headers })
-        const json = await res.json() as { session_id?: string }
-        id = json.session_id ?? null
-      } catch { /* session ID is optional — transcription works without it */ }
-    }
+    try {
+      const token   = localStorage.getItem('jwt_token')
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      if (token) headers['Authorization'] = `Bearer ${token}`
+      const body: Record<string, string> = {}
+      if (id) body.session_id = id
+      if (opts.contextSeed) body.context_seed = opts.contextSeed
+      const res  = await fetch(`${API_ROOT()}/api/session/start`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      })
+      const json = await res.json() as { session_id?: string }
+      id = json.session_id ?? id
+    } catch { /* session ID is optional — transcription works without it */ }
 
     setSessionId(id)
     sessionIdRef.current    = id
@@ -389,5 +395,7 @@ export function useLiveSession(opts: {
     // Audio (doctor recorder)
     getBlob: doctorRec.getBlob,
     chunks:  doctorRec.chunks,
+    // Socket access — used by LiveSessionPage to subscribe to session_ready push
+    socket:  socketRef,
   }
 }

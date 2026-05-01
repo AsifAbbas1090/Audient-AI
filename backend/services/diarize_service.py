@@ -8,6 +8,17 @@ import json
 import re
 from typing import List, Dict, Any, Optional
 
+_groq_client = None
+
+
+def _get_client():
+    global _groq_client
+    if _groq_client is None:
+        from config import Config
+        from groq import Groq
+        _groq_client = Groq(api_key=Config.GROQ_API_KEY)
+    return _groq_client
+
 
 def split_segments_by_sentence(segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
@@ -60,8 +71,6 @@ def diarize_with_groq(segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         return segments   # not enough context
 
     try:
-        from groq import Groq
-
         numbered = "\n".join(
             f"{i + 1}. {s['text'].strip()}"
             for i, s in enumerate(text_segs)
@@ -79,7 +88,7 @@ def diarize_with_groq(segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             f"Transcript:\n{numbered}"
         )
 
-        client = Groq(api_key=Config.GROQ_API_KEY)
+        client = _get_client()
         resp = client.chat.completions.create(
             model=Config.GROQ_EXTRACT_MODEL,   # llama-3.1-8b-instant
             messages=[{"role": "user", "content": prompt}],

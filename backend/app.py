@@ -118,6 +118,13 @@ def create_app() -> Flask:
     # ── Routes + Socket handlers ────────────────────────────────────────────
     register_blueprints(app)
 
+    # ── Pre-load pyannote pipeline in background (if HF_TOKEN is set) ─────────
+    # Avoids a 30-90s blocking download on the first live diarization request.
+    if Config.HF_TOKEN:
+        import threading
+        from services import diarize_service
+        threading.Thread(target=diarize_service.get_pipeline, daemon=True, name="pyannote-preload").start()
+
     # ── Startup diagnostics ─────────────────────────────────────────────────
     groq_ready  = bool(Config.GROQ_API_KEY)
     diar_ready  = bool(Config.HF_TOKEN)
@@ -125,7 +132,7 @@ def create_app() -> Flask:
     redis_ready = bool(Config.REDIS_URL)
 
     print(f"[Boot] Groq API        : {'OK configured' if groq_ready else '-- NOT set — add GROQ_API_KEY to .env'}")
-    print(f"[Boot] Diarization     : {'OK pyannote enabled (HF_TOKEN set)' if diar_ready else '~~ Groq LLM text-based (set HF_TOKEN for audio-based)'}")
+    print(f"[Boot] Diarization     : {'OK pyannote pre-loading in background' if diar_ready else '~~ Groq LLM text-based (set HF_TOKEN for audio-based)'}")
     print(f"[Boot] Database        : {'OK configured' if db_ready else '-- NOT configured — set DATABASE_URL in .env'}")
     print(f"[Boot] WebSocket       : OK threading mode  ws://localhost:{Config.PORT}")
 

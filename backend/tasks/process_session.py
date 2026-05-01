@@ -196,6 +196,15 @@ def process_session_task(
         print(f"[task] {conv_id} complete in {elapsed()}")
 
         _send_notifications(conv)
+
+        # Push a WebSocket event so the frontend can navigate immediately
+        # instead of waiting for the 2-second HTTP poll cycle.
+        try:
+            from extensions import socketio
+            socketio.emit("session_ready", {"conversation_id": conv_id}, room=conv_id)
+        except Exception as e:
+            print(f"[task] session_ready emit failed: {e}")
+
         return {"success": True, "conversation_id": conv_id}
 
     except Exception as exc:

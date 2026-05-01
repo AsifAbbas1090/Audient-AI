@@ -18,10 +18,26 @@ def session_start():
     """
     Create a new session for accumulating audio chunks.
     Returns a session_id the frontend passes with every chunk.
-    If authenticated, associates the session with the user's account.
+
+    Optional body fields:
+      session_id    — pre-created ID to reuse (e.g. from /continue endpoint)
+      context_seed  — last ~500 chars of a parent session's transcript; pre-loaded
+                      into the rolling Whisper prompt so the first chunk starts
+                      in-context rather than cold.
     """
-    session_id = str(uuid.uuid4())
+    body = request.get_json(silent=True) or {}
+
+    # Use a pre-created ID when continuing from an existing session, otherwise generate fresh
+    session_id = (body.get("session_id") or "").strip() or str(uuid.uuid4())
     audio_service.create_session(session_id)
+
+    # Pre-seed the Whisper rolling context so the first chunk of a follow-up
+    # session continues naturally from the end of the parent transcript.
+    context_seed = (body.get("context_seed") or "").strip()
+    if context_seed:
+        from routes.socket_handlers import _session_context
+        _session_context[session_id] = context_seed[-500:]
+        print(f"[session/start] Seeded context for {session_id[:8]} ({len(context_seed)} chars)")
 
     # Persist a Conversation record when DB is configured (with or without auth)
     user_id = getattr(g, "user_id", None)
@@ -29,10 +45,12 @@ def session_start():
         try:
             from extensions import db
             from models.conversation import Conversation
-            conv = Conversation(id=session_id, user_id=user_id, status="processing", is_offline=False)
-            db.session.add(conv)
-            db.session.commit()
-            print(f"[session/start] Conversation {session_id} created (user_id={user_id})")
+            # Only create a new row if one doesn't already exist (pre-created by /continue)
+            if not Conversation.query.get(session_id):
+                conv = Conversation(id=session_id, user_id=user_id, status="processing", is_offline=False)
+                db.session.add(conv)
+                db.session.commit()
+                print(f"[session/start] Conversation {session_id} created (user_id={user_id})")
         except Exception as e:
             db.session.rollback()
             print(f"[session/start] Could not persist conversation: {e}")

@@ -718,13 +718,14 @@ def export_pdf(conv_id: str):
 @require_auth
 def continue_session(conv_id: str):
     """
-    Create a new 'continuation' conversation linked to an existing completed one.
-    The continuation is a standard live session but pre-linked via parent_id so
-    the frontend can:
-      - Show the original's follow-up questions as context
-      - Append the new transcript to the parent after completion
+    Create a continuation conversation linked to an existing completed one.
 
-    Returns the new conversation's session_id so LiveSessionPage can use it.
+    Returns:
+      session_id           — new conversation ID to pass to /live?continue=
+      parent_id            — the original conversation ID
+      context_seed         — last 500 chars of parent transcript (fed to Whisper prompt)
+      parent_summary       — extracted medical fields from parent (shown as context card)
+      follow_up_questions  — AI-generated questions from parent (shown as checklist)
     """
     if not _db_available():
         return jsonify({"error": "Database not configured"}), 503
@@ -748,10 +749,80 @@ def continue_session(conv_id: str):
         )
         db.session.add(cont)
         db.session.commit()
-        return jsonify({"session_id": cont.id, "parent_id": conv_id}), 201
+
+        # ── Build context seed from parent transcript ──────────────────────
+        # Last 500 chars of the parent's raw transcript text are passed to
+        # Whisper as a rolling prompt on the very first chunk of the new
+        # session, so it starts in-context rather than cold.
+        context_seed = ""
+        if parent.transcript:
+            full_text = (parent.transcript.raw_text or "").strip()
+            context_seed = full_text[-500:] if full_text else ""
+
+        # ── Build parent summary context for the sidebar card ──────────────
+        parent_summary = {}
+        follow_up_questions = []
+        if parent.summary:
+            s = parent.summary
+            parent_summary = {
+                "patient_name":    s.patient_name,
+                "patient_age":     s.patient_age,
+                "patient_gender":  s.patient_gender,
+                "disease":         s.disease,
+                "additional_notes": s.additional_notes,
+                "emotional_state": s.emotional_state,
+            }
+            follow_up_questions = s.follow_up_questions or []
+
+        return jsonify({
+            "session_id":           cont.id,
+            "parent_id":            conv_id,
+            "context_seed":         context_seed,
+            "parent_summary":       parent_summary,
+            "follow_up_questions":  follow_up_questions,
+        }), 201
+
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": str(e)}), 500
+
+
+@conversations_bp.route("/<string:conv_id>/continuations", methods=["GET"])
+@require_auth
+def list_continuations(conv_id: str):
+    """
+    Return all follow-up sessions that have this conversation as their parent.
+    Used by SessionDetailPage to show "Follow-up sessions" on the parent card,
+    and "Continuing from" metadata on the child card.
+    """
+    if not _db_available():
+        return jsonify({"continuations": []}), 200
+
+    parent = Conversation.query.get(conv_id)
+    if not parent or parent.deleted_at:
+        return jsonify({"error": "Session not found"}), 404
+    if parent.user_id and parent.user_id != g.user_id and g.user_role != "admin":
+        return jsonify({"error": "Access denied"}), 403
+
+    children = (
+        Conversation.query
+        .filter_by(parent_id=conv_id)
+        .filter(Conversation.deleted_at.is_(None))
+        .order_by(Conversation.created_at.asc())
+        .all()
+    )
+
+    return jsonify({
+        "continuations": [
+            {
+                "id":         c.id,
+                "title":      c.title,
+                "status":     c.status,
+                "created_at": c.created_at.isoformat() if c.created_at else None,
+            }
+            for c in children
+        ]
+    }), 200
 
 
 # ── Utility ──────────────────────────────────────────────────────────────────

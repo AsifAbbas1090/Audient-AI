@@ -245,6 +245,11 @@ export default function SessionDetailPage() {
   const [commentDraft,   setCommentDraft]   = useState('')
   const [postingComment, setPostingComment] = useState(false)
 
+  // Continuation linkage
+  type ContinuationItem = { id: string; title: string | null; status: string; created_at: string }
+  const [continuations,  setContinuations]  = useState<ContinuationItem[]>([])
+  const [parentConv,     setParentConv]     = useState<{ id: string; title: string | null } | null>(null)
+
   useEffect(() => {
     if (!id) return
     setLoading(true)
@@ -264,6 +269,22 @@ export default function SessionDetailPage() {
   useEffect(() => {
     if (editingTitle) titleInputRef.current?.focus()
   }, [editingTitle])
+
+  // Fetch follow-up sessions created from this one
+  useEffect(() => {
+    if (!id) return
+    api.get<{ continuations: ContinuationItem[] }>(`/api/conversations/${id}/continuations`)
+      .then(r => setContinuations(r.data.continuations ?? []))
+      .catch(() => {})
+  }, [id])
+
+  // Fetch parent session title when this is a continuation
+  useEffect(() => {
+    if (!conv?.parent_id) return
+    api.get<{ conversation: { id: string; title: string | null } }>(`/api/conversations/${conv.parent_id}`)
+      .then(r => setParentConv({ id: r.data.conversation.id, title: r.data.conversation.title }))
+      .catch(() => {})
+  }, [conv?.parent_id])
 
   // Load grants + comments once conv is available
   const loadGrants = useCallback(async () => {
@@ -567,7 +588,26 @@ export default function SessionDetailPage() {
     if (!conv || continuingSession) return
     setContinuingSession(true)
     try {
-      const res = await api.post<{ session_id: string }>(`/api/conversations/${conv.id}/continue`)
+      const res = await api.post<{
+        session_id:          string
+        parent_id:           string
+        context_seed:        string
+        parent_summary:      Record<string, string | null>
+        follow_up_questions: string[]
+      }>(`/api/conversations/${conv.id}/continue`)
+
+      // Stash enriched context in sessionStorage so LiveSessionPage can read it
+      // without an extra API round-trip.
+      sessionStorage.setItem(
+        `continue_ctx_${res.data.session_id}`,
+        JSON.stringify({
+          contextSeed:       res.data.context_seed,
+          parentSummary:     res.data.parent_summary,
+          followUpQuestions: res.data.follow_up_questions,
+          parentTitle:       conv.title,
+        }),
+      )
+
       navigate(`/live?continue=${res.data.session_id}&parent=${conv.id}`)
     } catch {
       toast('Could not start continuation session', 'error')
@@ -1334,6 +1374,62 @@ export default function SessionDetailPage() {
                   </Card>
                 )
               })()}
+
+              {/* ── Continuing From card (shown when this session is a follow-up) ── */}
+              {parentConv && (
+                <Card variant="elevated" className="p-4">
+                  <h2 className="font-semibold text-white light:text-slate-900 text-sm flex items-center gap-2 mb-3">
+                    <RefreshCw size={13} className="text-violet-400" />
+                    Continuing From
+                  </h2>
+                  <button
+                    onClick={() => navigate(`/session/${parentConv.id}`)}
+                    className="w-full text-left rounded-lg border border-violet-500/20 bg-violet-500/5 hover:bg-violet-500/10 px-3 py-2.5 transition-colors"
+                  >
+                    <p className="text-xs font-medium text-violet-300 truncate">
+                      {parentConv.title ?? 'Untitled Session'}
+                    </p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">View original session →</p>
+                  </button>
+                </Card>
+              )}
+
+              {/* ── Follow-up Sessions card (shown on the parent when children exist) ── */}
+              {continuations.length > 0 && (
+                <Card variant="elevated" className="p-4">
+                  <h2 className="font-semibold text-white light:text-slate-900 text-sm flex items-center gap-2 mb-3">
+                    <RefreshCw size={13} className="text-brand-400" />
+                    Follow-up Sessions
+                    <span className="ml-auto text-[10px] font-normal text-slate-500">{continuations.length}</span>
+                  </h2>
+                  <ul className="space-y-2">
+                    {continuations.map(c => (
+                      <li key={c.id}>
+                        <button
+                          onClick={() => navigate(`/session/${c.id}`)}
+                          className="w-full text-left rounded-lg border border-white/6 bg-white/3 hover:bg-white/6 px-3 py-2 transition-colors"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-xs text-slate-200 truncate">{c.title ?? 'Follow-up Session'}</p>
+                            <span className={`shrink-0 text-[9px] font-semibold px-1.5 py-0.5 rounded-full ${
+                              c.status === 'complete' || c.status === 'approved'
+                                ? 'bg-emerald-500/15 text-emerald-400'
+                                : c.status === 'failed'
+                                  ? 'bg-red-500/15 text-red-400'
+                                  : 'bg-slate-500/15 text-slate-400'
+                            }`}>
+                              {c.status}
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-slate-500 mt-0.5">
+                            {new Date(c.created_at).toLocaleDateString()}
+                          </p>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </Card>
+              )}
 
               {/* Patient card */}
               {isOwner && (

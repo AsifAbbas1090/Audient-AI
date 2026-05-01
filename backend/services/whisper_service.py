@@ -10,14 +10,30 @@ Improvements over v1:
 import os
 from typing import List, Dict, Any, Optional
 
+_groq_client = None
+
+
+def _get_client():
+    global _groq_client
+    if _groq_client is None:
+        from config import Config
+        from groq import Groq
+        _groq_client = Groq(api_key=Config.GROQ_API_KEY)
+    return _groq_client
+
 # Medical consultation context fed to Whisper as an initial_prompt.
 # Whisper uses this to bias its vocabulary toward clinical terminology,
 # reducing errors on drug names, conditions, and anatomical terms.
 _MEDICAL_PROMPT = (
-    "Medical consultation. Doctor and patient. "
-    "Symptoms, diagnosis, prescription, treatment plan. "
-    "Blood pressure, diabetes, hypertension, medication, dosage, allergy, "
-    "chronic, acute, referral, follow-up, CBC, ECG, MRI, ultrasound."
+    "Medical consultation transcript. Doctor asks, patient answers. "
+    "Symptoms, diagnosis, prescription, treatment plan, follow-up, referral. "
+    "Conditions: diabetes mellitus, hypertension, tachycardia, bradycardia, "
+    "myocardial infarction, hypertrophy, chronic, acute, allergy. "
+    "Medications: metformin, lisinopril, atorvastatin, amoxicillin, omeprazole, "
+    "paracetamol, aspirin, ibuprofen, metoprolol, amlodipine, furosemide, insulin, "
+    "prednisolone, prednisone, azithromycin, ciprofloxacin, warfarin, clopidogrel. "
+    "Tests: CBC, ECG, MRI, CT scan, ultrasound, HbA1c, creatinine, hemoglobin, BMI, "
+    "blood pressure, heart rate, ICU, ER, ED, BP, HR."
 )
 
 
@@ -59,8 +75,7 @@ def transcribe(
             "GROQ_API_KEY not set. Get a free key at https://console.groq.com"
         )
 
-    from groq import Groq
-    client = Groq(api_key=Config.GROQ_API_KEY)
+    client = _get_client()
 
     with open(audio_path, "rb") as f:
         audio_bytes = f.read()
@@ -72,7 +87,7 @@ def transcribe(
     if context:
         # Whisper uses the prompt as prior context — appending the last sentence
         # prevents it from starting cold and mis-transcribing the first word.
-        prompt = f"{_MEDICAL_PROMPT} {context[-200:].strip()}"
+        prompt = f"{_MEDICAL_PROMPT} {context.strip()}"
 
     # Auto-switch: translating English → English adds no value and increases latency
     if task == "translate" and _is_english(language_hint):
