@@ -32,15 +32,6 @@ function languageHintForSocket(label: string): string | undefined {
   return undefined
 }
 
-/** WS audio_chunk: only ISO-style hints — never UI strings like "English (translated)". */
-function languageHintForSocket(label: string): string | undefined {
-  const t = label.trim()
-  if (!t || t === 'Unknown') return undefined
-  if (/translat/i.test(t) || /[→]/.test(t) || /->/.test(t)) return undefined
-  if (/^[a-zA-Z]{2,3}$/.test(t)) return t.toLowerCase()
-  return undefined
-}
-
 // ── Types ─────────────────────────────────────────────────────────────────────
 export type Segment = {
   id:          number
@@ -138,9 +129,6 @@ export function useLiveSession(opts: {
   // Opus at 32kbps is optimal for speech: small chunks, high intelligibility.
   const doctorRec  = useMediaRecorder({ mimeType: 'audio/webm;codecs=opus', timeslice: 500, audioBitsPerSecond: 32_000 })
   const patientRec = useMediaRecorder({ mimeType: 'audio/webm;codecs=opus', timeslice: 500, audioBitsPerSecond: 32_000 })
-  // Opus at 32kbps is optimal for speech: small chunks, high intelligibility.
-  const doctorRec  = useMediaRecorder({ mimeType: 'audio/webm;codecs=opus', timeslice: 500, audioBitsPerSecond: 32_000 })
-  const patientRec = useMediaRecorder({ mimeType: 'audio/webm;codecs=opus', timeslice: 500, audioBitsPerSecond: 32_000 })
 
   // ── Socket connection ────────────────────────────────────────────────────────
   const connect = useCallback(() => {
@@ -149,9 +137,6 @@ export function useLiveSession(opts: {
     const token  = localStorage.getItem('jwt_token')
     const socket = io(SOCKET_ORIGIN(), {
       auth:  { token },
-      // Vite proxies /socket.io with ws:true so WebSocket works in dev too.
-      // Start with polling for the handshake then upgrade — same behaviour in dev and prod.
-      transports:           ['polling', 'websocket'],
       // Vite proxies /socket.io with ws:true so WebSocket works in dev too.
       // Start with polling for the handshake then upgrade — same behaviour in dev and prod.
       transports:           ['polling', 'websocket'],
@@ -224,7 +209,6 @@ export function useLiveSession(opts: {
     socketRef.current.emit('audio_chunk', {
       session_id:     sessionIdRef.current,
       audio:          buffer,
-      language:       languageHintForSocket(detectedLangRef.current),
       language:       languageHintForSocket(detectedLangRef.current),
       is_final:       isFinal,
       forced_speaker: forcedSpeaker,
@@ -505,8 +489,6 @@ export function useLiveSession(opts: {
     // Audio (doctor recorder)
     getBlob: doctorRec.getBlob,
     chunks:  doctorRec.chunks,
-    // Socket access — used by LiveSessionPage to subscribe to session_ready push
-    socket:  socketRef,
     // Socket access — used by LiveSessionPage to subscribe to session_ready push
     socket:  socketRef,
   }

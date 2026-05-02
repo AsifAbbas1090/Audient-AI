@@ -165,21 +165,6 @@ export default function LiveSessionPage() {
     } catch { return null }
   }, [continueSessionId])
 
-  // ── Continuation context (stashed by SessionDetailPage before navigating) ──
-  type ContinueCtx = {
-    contextSeed:       string
-    parentSummary:     Record<string, string | null>
-    followUpQuestions: string[]
-    parentTitle:       string | null
-  }
-  const continueCtx = useMemo<ContinueCtx | null>(() => {
-    if (!continueSessionId) return null
-    try {
-      const raw = sessionStorage.getItem(`continue_ctx_${continueSessionId}`)
-      return raw ? (JSON.parse(raw) as ContinueCtx) : null
-    } catch { return null }
-  }, [continueSessionId])
-
   const [segments,     setSegments]     = useState<Segment[]>([])
   const [elapsed,      setElapsed]      = useState(0)
   const [processing,   setProcessing]   = useState(false)
@@ -188,8 +173,6 @@ export default function LiveSessionPage() {
   const [savedId,      setSavedId]      = useState<string | null>(null)
   const [statusMsg,    setStatusMsg]    = useState<string | null>(null)
   const [parentTitle,  setParentTitle]  = useState<string | null>(null)
-  // Tracks which follow-up questions have been addressed during the session
-  const [checkedQuestions, setCheckedQuestions] = useState<Set<number>>(new Set())
   // Tracks which follow-up questions have been addressed during the session
   const [checkedQuestions, setCheckedQuestions] = useState<Set<number>>(new Set())
 
@@ -266,7 +249,6 @@ export default function LiveSessionPage() {
   const session = useLiveSession({
     doctorDeviceId:  doctorDeviceId  || undefined,
     patientDeviceId: patientDeviceId || undefined,
-    contextSeed:     continueCtx?.contextSeed || undefined,
     contextSeed:     continueCtx?.contextSeed || undefined,
 
     onChunkSent: useCallback(() => {
