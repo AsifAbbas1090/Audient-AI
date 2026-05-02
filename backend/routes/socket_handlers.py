@@ -94,9 +94,8 @@ def handle_disconnect():
 # Module-level dict: { sid: { user_id, role } }
 _socket_meta: dict = {}
 
-# Rolling transcript context per session — last ~300 chars of text sent to Whisper
-# as an initial_prompt so each chunk continues naturally from the previous one.
-_session_context: dict = {}  # session_id → str
+# Rolling transcript context per session — bounded tail sent as Whisper prompt context.
+_session_context: dict = {}  # session_id → str (≤ whisper_service.WHISPER_ROLLING_CONTEXT_MAX)
 
 
 # ── Session room ──────────────────────────────────────────────────────────────
@@ -131,7 +130,8 @@ def handle_audio_chunk(data):
 
     audio_bytes    = data.get("audio")
     session_id     = (data.get("session_id")     or "").strip()
-    lang_hint      = (data.get("language")       or "").strip()
+    lang_hint_raw  = (data.get("language")       or "").strip()
+    lang_hint      = whisper_service.normalize_language(lang_hint_raw)
     is_final       = bool(data.get("is_final"))
     forced_speaker = (data.get("forced_speaker") or "").strip()  # dual-mic override
 
@@ -158,7 +158,7 @@ def handle_audio_chunk(data):
         result   = whisper_service.transcribe(
             tmp_path,
             task="translate",
-            language_hint=lang_hint or None,
+            language_hint=lang_hint,
             context=prior_context or None,
         )
         segments = result.get("segments", [])
@@ -171,7 +171,9 @@ def handle_audio_chunk(data):
         if session_id:
             new_text = " ".join(s.get("text", "").strip() for s in segments)
             combined = f"{prior_context} {new_text}".strip()
-            _session_context[session_id] = combined[-500:]  # keep last ~500 chars
+            _session_context[session_id] = combined[
+                -whisper_service.WHISPER_ROLLING_CONTEXT_MAX:
+            ]
 
         # ── Dual-mic: override speaker label when forced_speaker is set ──
         # The patient mic sends chunks tagged with forced_speaker="Patient"

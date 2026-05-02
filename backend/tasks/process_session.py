@@ -60,6 +60,7 @@ def process_session_task(
         _save_summary,
         _generate_field_reminders,
         _auto_title,
+        _merge_parent_summary_into_extraction,
     )
 
     conv = Conversation.query.get(conv_id)
@@ -136,6 +137,8 @@ def process_session_task(
         )
 
         if good_extraction:
+            extraction = _merge_parent_summary_into_extraction(conv, extraction)
+
             if conv.summary:
                 db.session.delete(conv.summary)
                 db.session.flush()

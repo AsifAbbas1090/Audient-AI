@@ -42,7 +42,15 @@ def transcribe_audio():
     if not audio_file.filename:
         return jsonify({"error": "empty filename"}), 400
 
-    if not Config.GROQ_API_KEY:
+    if (Config.TRANSCRIBE_PROVIDER or "groq") == "openai":
+        if not Config.OPENAI_API_KEY:
+            return jsonify(
+                {
+                    "error": "OPENAI_API_KEY not set — add it to .env, "
+                    "or set TRANSCRIBE_PROVIDER=groq"
+                }
+            ), 503
+    elif not Config.GROQ_API_KEY:
         return jsonify({"error": "GROQ_API_KEY not set — add it to .env"}), 503
 
     # ── Save uploaded file ───────────────────────────────────────
@@ -63,6 +71,8 @@ def transcribe_audio():
     translate  = _bool("translate")
     diarize    = _bool("diarize")
     session_id = (request.args.get("session_id") or request.form.get("session_id") or "").strip()
+    language_raw = (request.args.get("language") or request.form.get("language") or "").strip()
+    language_hint = whisper_service.normalize_language(language_raw)
 
     try:
         file_size = os.path.getsize(input_path)
@@ -79,7 +89,9 @@ def transcribe_audio():
 
         # ── Transcribe via Groq ──────────────────────────────────
         task      = "translate" if translate else "transcribe"
-        result    = whisper_service.transcribe(input_path, task=task)
+        result    = whisper_service.transcribe(
+            input_path, task=task, language_hint=language_hint
+        )
         segments  = result["segments"]
         language  = result.get("language", "Unknown")
         full_text = " ".join(s["text"].strip() for s in segments if s.get("text")).strip()

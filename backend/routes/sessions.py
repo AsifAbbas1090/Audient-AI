@@ -6,7 +6,7 @@ Session routes:
 import uuid
 from flask import Blueprint, request, jsonify, g
 from config import Config
-from services import audio_service, diarize_service
+from services import audio_service, diarize_service, whisper_service
 from utils.auth import optional_auth
 
 sessions_bp = Blueprint("sessions", __name__)
@@ -21,7 +21,7 @@ def session_start():
 
     Optional body fields:
       session_id    — pre-created ID to reuse (e.g. from /continue endpoint)
-      context_seed  — last ~500 chars of a parent session's transcript; pre-loaded
+      context_seed  — tail of a parent session's transcript (capped); pre-loaded
                       into the rolling Whisper prompt so the first chunk starts
                       in-context rather than cold.
     """
@@ -36,7 +36,8 @@ def session_start():
     context_seed = (body.get("context_seed") or "").strip()
     if context_seed:
         from routes.socket_handlers import _session_context
-        _session_context[session_id] = context_seed[-500:]
+        max_ctx = whisper_service.WHISPER_ROLLING_CONTEXT_MAX
+        _session_context[session_id] = context_seed[-max_ctx:]
         print(f"[session/start] Seeded context for {session_id[:8]} ({len(context_seed)} chars)")
 
     # Persist a Conversation record when DB is configured (with or without auth)

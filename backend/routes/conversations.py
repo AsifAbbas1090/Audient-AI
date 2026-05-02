@@ -24,6 +24,7 @@ from utils.auth import require_auth, optional_auth
 from utils.audit import log_action
 from services.template_service import get_active_template_version_id
 from services.patient_facing_service import generate_patient_facing_summary
+from services import whisper_service
 
 
 def _fill_patient_facing_summary(conv: Conversation, transcript_text: str) -> None:
@@ -79,6 +80,56 @@ def _save_transcript(conv_id: str, segments: list, language: str | None = None) 
             line_order=i,
         )
         db.session.add(line)
+
+
+def _field_blank(val) -> bool:
+    """True when extraction / DB field has no usable text."""
+    if val is None:
+        return True
+    s = str(val).strip().lower()
+    return s == "" or s in ("null", "none")
+
+
+def _merge_parent_summary_into_extraction(conv: Conversation, extraction: dict) -> dict:
+    """
+    For continuation sessions (parent_id set), copy stable demographics from the
+    parent's Summary when this visit's transcript did not repeat them.
+
+    Child extraction wins whenever it already has a value.
+    """
+    if not extraction or extraction.get("skipped") or extraction.get("error"):
+        return extraction
+    pid = getattr(conv, "parent_id", None)
+    if not pid:
+        return extraction
+    parent = Conversation.query.get(pid)
+    if not parent or not parent.summary:
+        return extraction
+
+    ps = parent.summary
+    parent_entities = ps.extracted_entities if isinstance(ps.extracted_entities, dict) else {}
+
+    def fill(child_json_key: str, summary_column: str, entity_keys: tuple[str, ...]) -> None:
+        if not _field_blank(extraction.get(child_json_key)):
+            return
+        val = getattr(ps, summary_column, None)
+        if _field_blank(val):
+            for ek in entity_keys:
+                ev = parent_entities.get(ek)
+                if not _field_blank(ev):
+                    val = ev
+                    break
+        if not _field_blank(val):
+            extraction[child_json_key] = val
+
+    fill("Name", "patient_name", ("Name",))
+    fill("Age", "patient_age", ("Age",))
+    fill("Gender", "patient_gender", ("Gender",))
+    fill("Education", "education", ("Education",))
+    # Same patient thread — carry diagnosis forward only if this extract left it blank.
+    fill("Disease", "disease", ("Disease",))
+
+    return extraction
 
 
 def _save_summary(conv_id: str, extraction: dict, followups: list | None = None) -> None:
@@ -723,7 +774,7 @@ def continue_session(conv_id: str):
     Returns:
       session_id           — new conversation ID to pass to /live?continue=
       parent_id            — the original conversation ID
-      context_seed         — last 500 chars of parent transcript (fed to Whisper prompt)
+      context_seed         — capped tail of parent transcript (fed to Whisper rolling prompt)
       parent_summary       — extracted medical fields from parent (shown as context card)
       follow_up_questions  — AI-generated questions from parent (shown as checklist)
     """
@@ -751,13 +802,13 @@ def continue_session(conv_id: str):
         db.session.commit()
 
         # ── Build context seed from parent transcript ──────────────────────
-        # Last 500 chars of the parent's raw transcript text are passed to
-        # Whisper as a rolling prompt on the very first chunk of the new
-        # session, so it starts in-context rather than cold.
+        # Tail of the parent's raw transcript is passed to Whisper as rolling
+        # prompt context on the first chunk of the new session.
         context_seed = ""
         if parent.transcript:
             full_text = (parent.transcript.raw_text or "").strip()
-            context_seed = full_text[-500:] if full_text else ""
+            max_ctx = whisper_service.WHISPER_ROLLING_CONTEXT_MAX
+            context_seed = full_text[-max_ctx:] if full_text else ""
 
         # ── Build parent summary context for the sidebar card ──────────────
         parent_summary = {}
