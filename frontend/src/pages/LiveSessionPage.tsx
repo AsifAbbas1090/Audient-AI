@@ -165,6 +165,21 @@ export default function LiveSessionPage() {
     } catch { return null }
   }, [continueSessionId])
 
+  // ── Continuation context (stashed by SessionDetailPage before navigating) ──
+  type ContinueCtx = {
+    contextSeed:       string
+    parentSummary:     Record<string, string | null>
+    followUpQuestions: string[]
+    parentTitle:       string | null
+  }
+  const continueCtx = useMemo<ContinueCtx | null>(() => {
+    if (!continueSessionId) return null
+    try {
+      const raw = sessionStorage.getItem(`continue_ctx_${continueSessionId}`)
+      return raw ? (JSON.parse(raw) as ContinueCtx) : null
+    } catch { return null }
+  }, [continueSessionId])
+
   const [segments,     setSegments]     = useState<Segment[]>([])
   const [elapsed,      setElapsed]      = useState(0)
   const [processing,   setProcessing]   = useState(false)
@@ -173,6 +188,8 @@ export default function LiveSessionPage() {
   const [savedId,      setSavedId]      = useState<string | null>(null)
   const [statusMsg,    setStatusMsg]    = useState<string | null>(null)
   const [parentTitle,  setParentTitle]  = useState<string | null>(null)
+  // Tracks which follow-up questions have been addressed during the session
+  const [checkedQuestions, setCheckedQuestions] = useState<Set<number>>(new Set())
   // Tracks which follow-up questions have been addressed during the session
   const [checkedQuestions, setCheckedQuestions] = useState<Set<number>>(new Set())
 
@@ -249,6 +266,7 @@ export default function LiveSessionPage() {
   const session = useLiveSession({
     doctorDeviceId:  doctorDeviceId  || undefined,
     patientDeviceId: patientDeviceId || undefined,
+    contextSeed:     continueCtx?.contextSeed || undefined,
     contextSeed:     continueCtx?.contextSeed || undefined,
 
     onChunkSent: useCallback(() => {
@@ -458,6 +476,8 @@ export default function LiveSessionPage() {
     setNoisyEnvironment(false)
     noisyCountRef.current = 0
     await startSession(continueSessionId ?? undefined)
+    // Clean up sessionStorage after the session is registered
+    if (continueSessionId) sessionStorage.removeItem(`continue_ctx_${continueSessionId}`)
     // Clean up sessionStorage after the session is registered
     if (continueSessionId) sessionStorage.removeItem(`continue_ctx_${continueSessionId}`)
     refreshDevices()
@@ -697,6 +717,72 @@ export default function LiveSessionPage() {
                 View original
               </button>
             )}
+          </div>
+        )}
+
+        {/* ── Parent context panel (continuation sessions only) ───────────── */}
+        {continueCtx && (
+          <div className="shrink-0 grid grid-cols-1 md:grid-cols-2 gap-3 px-6 py-3 border-b border-white/8 bg-slate-900/40">
+
+            {/* Patient summary card */}
+            {continueCtx.parentSummary && Object.values(continueCtx.parentSummary).some(Boolean) && (
+              <div className="rounded-lg border border-slate-700/60 bg-slate-800/50 p-3">
+                <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500 mb-2">Previous Visit — Patient</p>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                  {continueCtx.parentSummary.patient_name   && <><span className="text-slate-500">Name</span>   <span className="text-slate-200 truncate">{continueCtx.parentSummary.patient_name}</span></>}
+                  {continueCtx.parentSummary.patient_age    && <><span className="text-slate-500">Age</span>    <span className="text-slate-200">{continueCtx.parentSummary.patient_age}</span></>}
+                  {continueCtx.parentSummary.patient_gender && <><span className="text-slate-500">Gender</span> <span className="text-slate-200">{continueCtx.parentSummary.patient_gender}</span></>}
+                  {continueCtx.parentSummary.disease        && <><span className="text-slate-500">Condition</span><span className="text-slate-200 truncate col-span-1">{continueCtx.parentSummary.disease}</span></>}
+                  {continueCtx.parentSummary.additional_notes && (
+                    <div className="col-span-2 mt-1 text-slate-400 leading-relaxed line-clamp-2">
+                      {continueCtx.parentSummary.additional_notes}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Follow-up questions checklist */}
+            {continueCtx.followUpQuestions.length > 0 && (
+              <div className="rounded-lg border border-slate-700/60 bg-slate-800/50 p-3">
+                <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500 mb-2">
+                  AI-Suggested Follow-up Questions
+                </p>
+                <ul className="space-y-1.5">
+                  {continueCtx.followUpQuestions.map((q, i) => (
+                    <li key={i} className="flex items-start gap-2">
+                      <button
+                        onClick={() => setCheckedQuestions(prev => {
+                          const next = new Set(prev)
+                          next.has(i) ? next.delete(i) : next.add(i)
+                          return next
+                        })}
+                        className={`mt-0.5 shrink-0 w-3.5 h-3.5 rounded border transition-colors ${
+                          checkedQuestions.has(i)
+                            ? 'bg-emerald-500 border-emerald-500'
+                            : 'border-slate-600 bg-transparent hover:border-slate-400'
+                        }`}
+                      >
+                        {checkedQuestions.has(i) && (
+                          <svg viewBox="0 0 10 10" fill="none" className="w-full h-full p-0.5">
+                            <path d="M1.5 5L4 7.5L8.5 2.5" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                          </svg>
+                        )}
+                      </button>
+                      <span className={`text-xs leading-relaxed transition-colors ${checkedQuestions.has(i) ? 'text-slate-500 line-through' : 'text-slate-300'}`}>
+                        {q}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                {checkedQuestions.size > 0 && (
+                  <p className="mt-2 text-[10px] text-emerald-500">
+                    {checkedQuestions.size}/{continueCtx.followUpQuestions.length} addressed
+                  </p>
+                )}
+              </div>
+            )}
+
           </div>
         )}
 
