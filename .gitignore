@@ -11,6 +11,8 @@
 # .env.example is intentionally committed as a setup template.
 # .env contains real secrets — never commit it.
 .env
+# Never commit Ubuntu deploy helper that embeds secrets (keep local only).
+scripts/ubuntu-server-env-setup.secret.sh
 .env.local
 **/.env
 

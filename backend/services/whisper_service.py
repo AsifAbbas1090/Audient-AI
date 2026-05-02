@@ -6,6 +6,7 @@ Set TRANSCRIBE_PROVIDER=groq (default) or openai in .env.
   - OpenAI: OPENAI_API_KEY + OPENAI_TRANSCRIBE_MODEL (default whisper-1)
 """
 import os
+import re
 import unicodedata
 from typing import Any, Dict, List, Optional
 
@@ -80,11 +81,6 @@ _MEDICAL_PROMPT = (
     "blood pressure, heart rate, ICU, ER, ED, BP, HR."
 )
 
-_GROQ_LANGUAGE_CODES = frozenset({
-    "ar", "de", "en", "es", "fr", "hi", "id", "it", "ja", "ko",
-    "ms", "nl", "pl", "pt", "ru", "th", "tr", "ur", "vi", "zh",
-})
-
 _LANGUAGE_NAME_TO_CODE = {
     "arabic": "ar",
     "chinese": "zh",
@@ -110,20 +106,45 @@ _LANGUAGE_NAME_TO_CODE = {
 
 
 def normalize_language(value: str) -> str | None:
-    """Map UI labels to ISO-639-1 for Whisper, or None to omit `language` (auto-detect)."""
+    """Map UI labels to ISO codes for Whisper, or None to omit `language` (auto-detect)."""
     if not value:
         return None
-    raw = value.strip()
+    raw = unicodedata.normalize("NFKC", value.strip())
     if not raw:
         return None
-    lowered = raw.lower()
-    if lowered in {"auto", "any", "any language"} or "translated" in lowered:
+    full_lower = raw.lower()
+    # Drop parenthetical UI text: "English (translated)" — still guard "translat" below.
+    simplified = re.sub(r"\([^)]*\)", "", raw).strip()
+    lowered = simplified.lower()
+    if (
+        lowered in {"auto", "any", "any language"}
+        or full_lower in {"auto", "any", "any language"}
+    ):
+        return None
+    if "translat" in full_lower:
+        return None
+    if "→" in raw or "->" in full_lower:
         return None
     if lowered in _LANGUAGE_NAME_TO_CODE:
         return _LANGUAGE_NAME_TO_CODE[lowered]
-    if len(lowered) == 2 and lowered in _GROQ_LANGUAGE_CODES:
+    if 2 <= len(lowered) <= 3 and lowered.isalpha():
         return lowered
     return None
+
+
+def _language_code_for_api(lang: Optional[str]) -> Optional[str]:
+    """Only pass through short alphabetic codes; never UI strings like 'English (translated)'."""
+    if not lang:
+        return None
+    s = lang.strip().lower()
+    if 2 <= len(s) <= 3 and s.isalpha():
+        return s
+    return None
+
+
+def _groq_translation_kwargs(common_kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """Groq translations must never receive `language` (invalid values → 400)."""
+    return {k: v for k, v in common_kwargs.items() if k != "language"}
 
 
 def _is_english(lang: Optional[str]) -> bool:
@@ -218,6 +239,7 @@ def _transcribe_groq(
 
     prompt_for_api = _prepare_prompt_for_groq(context)
     normalized_language = normalize_language(language_hint or "")
+    lang_for_api = _language_code_for_api(normalized_language)
 
     if task == "translate" and _is_english(normalized_language):
         task = "transcribe"
@@ -230,12 +252,13 @@ def _transcribe_groq(
     )
     if prompt_for_api:
         common_kwargs["prompt"] = prompt_for_api
-    if task == "transcribe" and normalized_language:
-        common_kwargs["language"] = normalized_language
+    if task == "transcribe" and lang_for_api:
+        common_kwargs["language"] = lang_for_api
 
     if task == "translate":
-        response = client.audio.translations.create(**common_kwargs)
-        language = "English (translated)"
+        # Never pass `language` here — clients sometimes echo old labels back into transcribe calls.
+        response = client.audio.translations.create(**_groq_translation_kwargs(common_kwargs))
+        language = "English"
     else:
         response = client.audio.transcriptions.create(**common_kwargs)
         language = (
@@ -288,6 +311,7 @@ def _transcribe_openai(
 
     prompt_for_api = _prepare_prompt_for_openai(context)
     normalized_language = normalize_language(language_hint or "")
+    lang_for_api = _language_code_for_api(normalized_language)
 
     if task == "translate" and _is_english(normalized_language):
         task = "transcribe"
@@ -298,8 +322,8 @@ def _transcribe_openai(
         kwargs: Dict[str, Any] = dict(model=model, file=file_tuple)
         if prompt_for_api:
             kwargs["prompt"] = prompt_for_api
-        response = client.audio.translations.create(**kwargs)
-        language = "English (translated)"
+        response = client.audio.translations.create(**{k: v for k, v in kwargs.items() if k != "language"})
+        language = "English"
         full_text = correct_text((getattr(response, "text", "") or "").strip())
         segments: List[Dict[str, Any]] = []
         if full_text:
@@ -311,8 +335,8 @@ def _transcribe_openai(
     kwargs = dict(model=model, file=file_tuple, response_format="verbose_json")
     if prompt_for_api:
         kwargs["prompt"] = prompt_for_api
-    if normalized_language:
-        kwargs["language"] = normalized_language
+    if lang_for_api:
+        kwargs["language"] = lang_for_api
     response = client.audio.transcriptions.create(**kwargs)
     segments, lang = _segments_from_openai_verbose(response, correct_text)
     language = lang or normalized_language or "Unknown"
@@ -333,6 +357,7 @@ def transcribe(
     """
     from config import Config
 
+    language_hint = normalize_language((language_hint or "").strip())
     provider = (Config.TRANSCRIBE_PROVIDER or "groq").strip().lower()
 
     if provider == "openai":

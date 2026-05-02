@@ -23,6 +23,15 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { io, Socket }        from 'socket.io-client'
 import { useMediaRecorder }  from './useMediaRecorder'
 
+/** WS audio_chunk: only ISO-style hints — never UI strings like "English (translated)". */
+function languageHintForSocket(label: string): string | undefined {
+  const t = label.trim()
+  if (!t || t === 'Unknown') return undefined
+  if (/translat/i.test(t) || /[→]/.test(t) || /->/.test(t)) return undefined
+  if (/^[a-zA-Z]{2,3}$/.test(t)) return t.toLowerCase()
+  return undefined
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 export type Segment = {
   id:          number
@@ -189,7 +198,7 @@ export function useLiveSession(opts: {
     socketRef.current.emit('audio_chunk', {
       session_id:     sessionIdRef.current,
       audio:          buffer,
-      language:       detectedLangRef.current !== 'Unknown' ? detectedLangRef.current : undefined,
+      language:       languageHintForSocket(detectedLangRef.current),
       is_final:       isFinal,
       forced_speaker: forcedSpeaker,
     })

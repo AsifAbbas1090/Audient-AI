@@ -1,0 +1,66 @@
+# Audient AI — Docker Compose (Ubuntu / AWS EC2)
+#
+# Prerequisites:
+#   - backend/.env exists (DATABASE_URL, keys, JWT, etc.)
+#   - FRONTEND_URL and APP_URL in backend/.env = public URL users open in browser, e.g.
+#       http://13.210.144.218
+#     (same host as port 80 below — nginx serves SPA + proxies API)
+#
+# Commands:
+#   docker compose build
+#   docker compose up -d
+#   docker compose logs -f
+#
+# AWS: security group must allow inbound TCP 80 (and 443 if you add TLS later).
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      # Overrides empty .env — enables Limiter + Celery queue (worker service below)
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - backend_temp:/app/temp
+    expose:
+      - "5000"
+    depends_on:
+      - redis
+
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: celery -A celery_app.celery worker --loglevel=info
+    env_file:
+      - ./backend/.env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - backend_temp:/app/temp
+    depends_on:
+      - redis
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ""
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+
+volumes:
+  backend_temp:
