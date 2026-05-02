@@ -77,7 +77,7 @@ def default_template_schema(specialty: str) -> dict[str, Any]:
 
 
 def default_patient_facing_schema(specialty: str) -> dict[str, Any]:
-    """Default layout for patient-facing PDFs (plain-language block + optional identity)."""
+    """Default layout for patient-facing PDFs: narrative + key visit facts (matches clinical data sources)."""
     spec = normalize_specialty(specialty)
     pfs_label = {
         "psychiatry": "After-visit summary (supportive, clear)",
@@ -86,6 +86,21 @@ def default_patient_facing_schema(specialty: str) -> dict[str, Any]:
         "general_practice": "After-visit summary (what we agreed today)",
         "general_mbbs": "After-visit summary (patient)",
     }.get(spec, "After-visit summary (patient)")
+    dx_label = {
+        "psychiatry": "Focus of today's visit",
+        "cardiology": "Heart-related concern we're addressing",
+        "paediatrics": "What we're treating / watching",
+        "general_practice": "Reason for today's visit",
+        "general_mbbs": "Condition / concern discussed today",
+    }.get(spec, "What we're addressing today")
+    notes_label = {
+        "psychiatry": "Medicines, safety, and plan reminders",
+        "cardiology": "Medicines, tests, and lifestyle reminders",
+        "paediatrics": "Care instructions for home",
+        "general_practice": "Important notes from your visit",
+        "general_mbbs": "Important notes from your visit",
+    }.get(spec, "Important notes from your visit")
+    emotional_visible = spec == "psychiatry"
     return {
         "sections": [
             {
@@ -95,9 +110,33 @@ def default_patient_facing_schema(specialty: str) -> dict[str, Any]:
                 "visible": True,
             },
             {
-                "id": "pn",
-                "label": "Name on file",
-                "source_key": "patient_name",
+                "id": "dx_pf",
+                "label": dx_label,
+                "source_key": "disease",
+                "visible": True,
+            },
+            {
+                "id": "emotion_pf",
+                "label": "How you've been feeling",
+                "source_key": "emotional_state",
+                "visible": emotional_visible,
+            },
+            {
+                "id": "edu_pf",
+                "label": "Education / understanding",
+                "source_key": "education",
+                "visible": spec in ("paediatrics", "general_mbbs", "general_practice"),
+            },
+            {
+                "id": "notes_pf",
+                "label": notes_label,
+                "source_key": "additional_notes",
+                "visible": True,
+            },
+            {
+                "id": "fu_pf",
+                "label": "Before your next appointment",
+                "source_key": "follow_up_questions",
                 "visible": True,
             },
             {

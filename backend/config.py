@@ -49,6 +49,15 @@ class Config:
     GROQ_TRANSCRIBE_MODEL: str = "whisper-large-v3"
     GROQ_EXTRACT_MODEL: str = os.getenv("GROQ_EXTRACT_MODEL", "llama-3.1-8b-instant").strip()
 
+    # Speech-to-text provider: "groq" (default) or "openai" (Whisper API — e.g. for demos)
+    TRANSCRIBE_PROVIDER: str = (
+        os.getenv("TRANSCRIBE_PROVIDER", "groq").strip().lower() or "groq"
+    )
+    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "").strip()
+    OPENAI_TRANSCRIBE_MODEL: str = (
+        os.getenv("OPENAI_TRANSCRIBE_MODEL", "whisper-1").strip() or "whisper-1"
+    )
+
     # ------------------------------------------------------------------ #
     # Speaker Diarization (Pyannote — offline, optional)                  #
     # ------------------------------------------------------------------ #

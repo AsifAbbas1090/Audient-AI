@@ -15,9 +15,10 @@ import { SpeakerBubble, isPatientSpeakerLabel, isThirdSpeakerLabel } from '../co
 import { VocalPromptsIndicator } from '../components/VocalPromptsIndicator'
 import { useVocalPrompts } from '../hooks/useVocalPrompts'
 import { speak, primeAudio } from '../lib/vocalAudio'
-import { useLiveSession, type Segment, type LiveFields } from '../hooks/useLiveSession'
+import { useLiveSession, type Segment, type LiveFields, type LlmCorrection } from '../hooks/useLiveSession'
 import { useToast }      from '../components/ui/Toaster'
 import api from '../lib/api'
+import { writeDraft, readDraft, clearDraft, type SessionDraft } from '../lib/sessionDraft'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const POLL_MS = 2_000
@@ -149,6 +150,21 @@ export default function LiveSessionPage() {
   const continueSessionId = searchParams.get('continue')
   const parentSessionId   = searchParams.get('parent')
 
+  // ── Continuation context (stashed by SessionDetailPage before navigating) ──
+  type ContinueCtx = {
+    contextSeed:       string
+    parentSummary:     Record<string, string | null>
+    followUpQuestions: string[]
+    parentTitle:       string | null
+  }
+  const continueCtx = useMemo<ContinueCtx | null>(() => {
+    if (!continueSessionId) return null
+    try {
+      const raw = sessionStorage.getItem(`continue_ctx_${continueSessionId}`)
+      return raw ? (JSON.parse(raw) as ContinueCtx) : null
+    } catch { return null }
+  }, [continueSessionId])
+
   const [segments,     setSegments]     = useState<Segment[]>([])
   const [elapsed,      setElapsed]      = useState(0)
   const [processing,   setProcessing]   = useState(false)
@@ -157,6 +173,8 @@ export default function LiveSessionPage() {
   const [savedId,      setSavedId]      = useState<string | null>(null)
   const [statusMsg,    setStatusMsg]    = useState<string | null>(null)
   const [parentTitle,  setParentTitle]  = useState<string | null>(null)
+  // Tracks which follow-up questions have been addressed during the session
+  const [checkedQuestions, setCheckedQuestions] = useState<Set<number>>(new Set())
 
   // ── Device selection ────────────────────────────────────────────────────────
   const [audioDevices,    setAudioDevices]    = useState<AudioDevice[]>([])
@@ -202,20 +220,36 @@ export default function LiveSessionPage() {
   const patientDeviceIdRef = useRef(patientDeviceId)
   const noisyCountRef      = useRef(0)
 
+  // Draft persistence state
+  const [draftToRestore,    setDraftToRestore]    = useState<SessionDraft | null>(null)
+  const [restoredSessionId, setRestoredSessionId] = useState<string | null>(null)
+
   useEffect(() => { elapsedRef.current = elapsed }, [elapsed])
   useEffect(() => { patientDeviceIdRef.current = patientDeviceId }, [patientDeviceId])
 
+  // ── Session draft persistence ─────────────────────────────────────────────────
+  // On mount: offer to restore an unsaved draft (e.g. after internet loss + reload)
   useEffect(() => {
-    if (!parentSessionId) return
-    api.get<{ conversation: { title: string | null } }>(`/api/conversations/${parentSessionId}`)
-      .then(r => setParentTitle(r.data.conversation.title))
-      .catch(() => {})
-  }, [parentSessionId])
+    const draft = readDraft()
+    if (draft && draft.segments.length > 0) setDraftToRestore(draft)
+  }, [])
+
+  // Populate parentTitle from stored context (fast, no extra API call) or fall back to a fetch
+  useEffect(() => {
+    if (continueCtx?.parentTitle) {
+      setParentTitle(continueCtx.parentTitle)
+    } else if (parentSessionId) {
+      api.get<{ conversation: { title: string | null } }>(`/api/conversations/${parentSessionId}`)
+        .then(r => setParentTitle(r.data.conversation.title))
+        .catch(() => {})
+    }
+  }, [parentSessionId, continueCtx])
 
   // ── Live session hook ────────────────────────────────────────────────────────
   const session = useLiveSession({
     doctorDeviceId:  doctorDeviceId  || undefined,
     patientDeviceId: patientDeviceId || undefined,
+    contextSeed:     continueCtx?.contextSeed || undefined,
 
     onChunkSent: useCallback(() => {
       setProcessing(true)  // show typing bubble the instant audio leaves the browser
@@ -263,6 +297,24 @@ export default function LiveSessionPage() {
       })
     }, []),  // eslint-disable-line react-hooks/exhaustive-deps
 
+    // LLM speaker-correction: retroactively fix Doctor/Patient labels using
+    // semantic understanding. Runs every 25 s after a 15 s warm-up.
+    // "Doctor" → "Speaker 1", "Patient" → "Patient" to match display conventions.
+    onLlmCorrectUpdate: useCallback((corrections: LlmCorrection[]) => {
+      setSegments(prev => {
+        const corrMap = new Map(corrections.map(c => [c.id, c.speaker]))
+        return prev.map(seg => {
+          const role = corrMap.get(seg.id)
+          if (!role) return seg
+          return {
+            ...seg,
+            speaker:     role === 'Doctor' ? 'Speaker 1' : 'Patient',
+            provisional: false,   // semantically verified — no longer provisional
+          }
+        })
+      })
+    }, []),  // eslint-disable-line react-hooks/exhaustive-deps
+
     onLanguage: useCallback((lang: string) => {
       console.log('[Live] detected language:', lang)
     }, []),
@@ -279,6 +331,12 @@ export default function LiveSessionPage() {
     startSession, pauseSession, resumeSession, stopSession,
     getBlob,
   } = session
+
+  // Write to localStorage whenever segments accumulate during a live recording
+  useEffect(() => {
+    if (!sessionId || segments.length === 0) return
+    writeDraft(sessionId, segments, elapsedRef.current)
+  }, [segments, sessionId])  // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Timer ──────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -339,24 +397,41 @@ export default function LiveSessionPage() {
 
   async function pollUntilDone(convId: string) {
     let step = 2
+    let done = false
+
+    const finish = (failed = false) => {
+      if (done) return
+      done = true
+      clearInterval(pollRef.current!)
+      session.socket.current?.off('session_ready')
+      if (failed) {
+        setSaving(false)
+        isSavingRef.current = false
+        toast('Processing failed — transcript still visible above', 'error')
+      } else {
+        clearDraft()  // session fully saved — no need to keep the local copy
+        setRestoredSessionId(null)
+        setProgressStep(PROGRESS_STEPS.length - 1)
+        setSaving(false)
+        toast('Session saved — opening record…', 'success')
+        setTimeout(() => navigate(`/session/${convId}`), 800)
+      }
+    }
+
+    // Primary: WebSocket push — arrives the moment the task completes
+    session.socket.current?.on('session_ready', (data: { conversation_id: string }) => {
+      if (data.conversation_id === convId) finish()
+    })
+
+    // Fallback: HTTP poll — handles cases where WS is disconnected
     pollRef.current = setInterval(async () => {
       try {
         const r      = await api.get(`/api/conversations/${convId}/status`)
         const status = r.data?.status
         step = Math.min(step + 1, PROGRESS_STEPS.length - 2)
         setProgressStep(step)
-        if (status === 'complete' || status === 'approved') {
-          clearInterval(pollRef.current!)
-          setProgressStep(PROGRESS_STEPS.length - 1)
-          setSaving(false)
-          toast('Session saved — opening record…', 'success')
-          setTimeout(() => navigate(`/session/${convId}`), 800)
-        } else if (status === 'failed') {
-          clearInterval(pollRef.current!)
-          setSaving(false)
-          isSavingRef.current = false
-          toast('Processing failed — transcript still visible above', 'error')
-        }
+        if (status === 'complete' || status === 'approved') finish()
+        else if (status === 'failed') finish(true)
       } catch { /* transient — keep polling */ }
     }, POLL_MS)
   }
@@ -368,6 +443,10 @@ export default function LiveSessionPage() {
   // ── Actions ─────────────────────────────────────────────────────────────────
   const handleStart = useCallback(async () => {
     primeAudio()  // unlock AudioContext during this user gesture
+    // Discard any pending draft — new recording supersedes it
+    clearDraft()
+    setDraftToRestore(null)
+    setRestoredSessionId(null)
     isSavingRef.current = false
     setSavedId(null)
     setSegments([])
@@ -379,6 +458,8 @@ export default function LiveSessionPage() {
     setNoisyEnvironment(false)
     noisyCountRef.current = 0
     await startSession(continueSessionId ?? undefined)
+    // Clean up sessionStorage after the session is registered
+    if (continueSessionId) sessionStorage.removeItem(`continue_ctx_${continueSessionId}`)
     refreshDevices()
     toast(continueSessionId ? 'Follow-up session started' : 'Session started — recording', 'success')
   }, [startSession, continueSessionId, toast, refreshDevices])
@@ -390,6 +471,31 @@ export default function LiveSessionPage() {
   const handleClear = useCallback(() => {
     setSegments([]); setStatusMsg(null); setElapsed(0); setSavedId(null); isSavingRef.current = false
   }, [])
+
+  // ── Draft restore / discard / save ──────────────────────────────────────────
+  function handleRestoreDraft() {
+    if (!draftToRestore) return
+    setSegments(draftToRestore.segments)
+    setElapsed(draftToRestore.elapsed)
+    elapsedRef.current = draftToRestore.elapsed
+    session.setSegmentsRef(draftToRestore.segments)
+    setRestoredSessionId(draftToRestore.sessionId)
+    isSavingRef.current = false
+    setDraftToRestore(null)
+    clearDraft()
+    toast('Session restored — review and save when ready', 'success')
+  }
+
+  function handleDiscardDraft() {
+    clearDraft()
+    setDraftToRestore(null)
+  }
+
+  async function handleSaveRestored() {
+    if (!restoredSessionId || saving) return
+    isSavingRef.current = true
+    await saveSession(restoredSessionId)
+  }
 
   // ── Scenario handlers ─────────────────────────────────────────────────────
   const handleAutoDualMic = useCallback(() => {
@@ -528,6 +634,53 @@ export default function LiveSessionPage() {
 
       <main className="flex-1 overflow-hidden flex flex-col light:bg-slate-100">
 
+        {/* ── Unsaved draft restore banner ────────────────────────────────── */}
+        {draftToRestore && !active && !saving && (
+          <div className="shrink-0 flex items-center gap-3 px-6 py-3 bg-amber-500/10 border-b border-amber-500/20">
+            <AlertCircle size={14} className="text-amber-400 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <span className="text-sm text-amber-200 font-medium">Unsaved session found</span>
+              <span className="text-xs text-amber-500 ml-2">
+                {formatTime(draftToRestore.elapsed)} · {draftToRestore.segments.length} segment{draftToRestore.segments.length !== 1 ? 's' : ''}
+              </span>
+              <p className="text-xs text-amber-500/80 mt-0.5">
+                Connection lost before saving. Restore to review and save the transcript.
+              </p>
+            </div>
+            <button
+              onClick={handleDiscardDraft}
+              className="shrink-0 text-xs text-slate-500 hover:text-slate-300 px-3 py-1.5 rounded-lg hover:bg-white/5 transition-colors"
+            >
+              Discard
+            </button>
+            <button
+              onClick={handleRestoreDraft}
+              className="shrink-0 flex items-center gap-1.5 text-xs bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 px-3 py-1.5 rounded-lg transition-colors font-medium"
+            >
+              <RefreshCw size={11} />
+              Restore Session
+            </button>
+          </div>
+        )}
+
+        {/* ── Restored-session action banner ──────────────────────────────── */}
+        {restoredSessionId && !active && !saving && (
+          <div className="shrink-0 flex items-center gap-3 px-6 py-2.5 bg-emerald-500/8 border-b border-emerald-500/15">
+            <CheckCircle2 size={13} className="text-emerald-400 shrink-0" />
+            <span className="text-xs text-emerald-300 flex-1">
+              Session restored from local cache. Review the transcript below, then save.
+            </span>
+            <button
+              onClick={handleSaveRestored}
+              disabled={saving}
+              className="shrink-0 flex items-center gap-1.5 text-xs bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 px-3 py-1.5 rounded-lg transition-colors font-medium disabled:opacity-50"
+            >
+              <CheckCircle2 size={11} />
+              Save Session
+            </button>
+          </div>
+        )}
+
         {/* ── Continuation banner ─────────────────────────────────────────── */}
         {continueSessionId && (
           <div className="shrink-0 flex items-center gap-2 px-6 py-2.5 bg-violet-500/10 border-b border-violet-500/20 text-xs text-violet-300">
@@ -544,6 +697,72 @@ export default function LiveSessionPage() {
                 View original
               </button>
             )}
+          </div>
+        )}
+
+        {/* ── Parent context panel (continuation sessions only) ───────────── */}
+        {continueCtx && (
+          <div className="shrink-0 grid grid-cols-1 md:grid-cols-2 gap-3 px-6 py-3 border-b border-white/8 bg-slate-900/40">
+
+            {/* Patient summary card */}
+            {continueCtx.parentSummary && Object.values(continueCtx.parentSummary).some(Boolean) && (
+              <div className="rounded-lg border border-slate-700/60 bg-slate-800/50 p-3">
+                <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500 mb-2">Previous Visit — Patient</p>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                  {continueCtx.parentSummary.patient_name   && <><span className="text-slate-500">Name</span>   <span className="text-slate-200 truncate">{continueCtx.parentSummary.patient_name}</span></>}
+                  {continueCtx.parentSummary.patient_age    && <><span className="text-slate-500">Age</span>    <span className="text-slate-200">{continueCtx.parentSummary.patient_age}</span></>}
+                  {continueCtx.parentSummary.patient_gender && <><span className="text-slate-500">Gender</span> <span className="text-slate-200">{continueCtx.parentSummary.patient_gender}</span></>}
+                  {continueCtx.parentSummary.disease        && <><span className="text-slate-500">Condition</span><span className="text-slate-200 truncate col-span-1">{continueCtx.parentSummary.disease}</span></>}
+                  {continueCtx.parentSummary.additional_notes && (
+                    <div className="col-span-2 mt-1 text-slate-400 leading-relaxed line-clamp-2">
+                      {continueCtx.parentSummary.additional_notes}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Follow-up questions checklist */}
+            {continueCtx.followUpQuestions.length > 0 && (
+              <div className="rounded-lg border border-slate-700/60 bg-slate-800/50 p-3">
+                <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500 mb-2">
+                  AI-Suggested Follow-up Questions
+                </p>
+                <ul className="space-y-1.5">
+                  {continueCtx.followUpQuestions.map((q, i) => (
+                    <li key={i} className="flex items-start gap-2">
+                      <button
+                        onClick={() => setCheckedQuestions(prev => {
+                          const next = new Set(prev)
+                          next.has(i) ? next.delete(i) : next.add(i)
+                          return next
+                        })}
+                        className={`mt-0.5 shrink-0 w-3.5 h-3.5 rounded border transition-colors ${
+                          checkedQuestions.has(i)
+                            ? 'bg-emerald-500 border-emerald-500'
+                            : 'border-slate-600 bg-transparent hover:border-slate-400'
+                        }`}
+                      >
+                        {checkedQuestions.has(i) && (
+                          <svg viewBox="0 0 10 10" fill="none" className="w-full h-full p-0.5">
+                            <path d="M1.5 5L4 7.5L8.5 2.5" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                          </svg>
+                        )}
+                      </button>
+                      <span className={`text-xs leading-relaxed transition-colors ${checkedQuestions.has(i) ? 'text-slate-500 line-through' : 'text-slate-300'}`}>
+                        {q}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                {checkedQuestions.size > 0 && (
+                  <p className="mt-2 text-[10px] text-emerald-500">
+                    {checkedQuestions.size}/{continueCtx.followUpQuestions.length} addressed
+                  </p>
+                )}
+              </div>
+            )}
+
           </div>
         )}
 
@@ -568,8 +787,11 @@ export default function LiveSessionPage() {
             {savedId && !saving && (
               <Badge variant="success"><CheckCircle2 size={11} className="mr-1" /> Saved</Badge>
             )}
-            {!active && !savedId && segments.length > 0 && (
+            {!active && !savedId && segments.length > 0 && !restoredSessionId && (
               <Badge variant="default">Session ended</Badge>
+            )}
+            {restoredSessionId && !saving && (
+              <Badge variant="warning"><RefreshCw size={11} className="mr-1" /> Restored</Badge>
             )}
 
             {active && (
@@ -623,6 +845,12 @@ export default function LiveSessionPage() {
                       <Button variant="destructive" size="sm" onClick={handleStop} disabled={saving}>
                         <Square size={13} className="mr-1.5 fill-current" />
                         End Session
+                      </Button>
+                    )}
+                    {restoredSessionId && !active && !saving && (
+                      <Button variant="primary" size="sm" onClick={handleSaveRestored}>
+                        <CheckCircle2 size={13} className="mr-1.5" />
+                        Save Session
                       </Button>
                     )}
                   </div>

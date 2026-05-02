@@ -11,6 +11,7 @@ Session WAV accumulation:
 """
 import os
 import numpy as np
+import soundfile as sf
 from typing import Optional
 
 from config import Config
@@ -58,8 +59,6 @@ def append_chunk_to_session(session_id: str, chunk_path: str) -> None:
         return
 
     try:
-        import soundfile as sf
-
         # Read the new chunk
         new_data, sr = sf.read(converted, dtype="float32", always_2d=False)
 
@@ -75,10 +74,16 @@ def append_chunk_to_session(session_id: str, chunk_path: str) -> None:
     except Exception as e:
         print(f"[audio] append_chunk failed: {e}")
     finally:
-        # Remove the temporary converted file (not the original chunk_path)
+        # Remove the temporary converted WAV (intermediate file)
         if converted != chunk_path and os.path.exists(converted):
             try:
                 os.remove(converted)
+            except OSError:
+                pass
+        # Remove the original chunk — caller set tmp_path=None to signal ownership transfer
+        if chunk_path and os.path.exists(chunk_path):
+            try:
+                os.remove(chunk_path)
             except OSError:
                 pass
 
@@ -117,12 +122,26 @@ def _to_wav_16k(input_path: str) -> str:
     return wav_out
 
 
-def is_silent(file_path: str, min_bytes: int = 500) -> bool:
-    """Lightweight silence check by file size."""
+def is_silent(file_path: str, rms_threshold: float = 0.005) -> bool:
+    """
+    Silence check using RMS energy on the decoded audio signal.
+    Falls back to a file-size guard if soundfile can't decode the format
+    (e.g. raw WebM before FFmpeg conversion).
+    """
     try:
-        return os.path.getsize(file_path) < min_bytes
-    except OSError:
-        return True
+        if os.path.getsize(file_path) < 200:
+            return True
+        data, _ = sf.read(file_path, dtype="float32", always_2d=False)
+        if data.size == 0:
+            return True
+        rms = float(np.sqrt(np.mean(data ** 2)))
+        return rms < rms_threshold
+    except Exception:
+        # soundfile can't decode WebM — fall back to size heuristic
+        try:
+            return os.path.getsize(file_path) < 500
+        except OSError:
+            return True
 
 
 # ── Waveform loading (for pyannote) ──────────────────────────────────────────

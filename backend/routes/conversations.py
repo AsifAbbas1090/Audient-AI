@@ -24,6 +24,7 @@ from utils.auth import require_auth, optional_auth
 from utils.audit import log_action
 from services.template_service import get_active_template_version_id
 from services.patient_facing_service import generate_patient_facing_summary
+from services import whisper_service
 
 
 def _fill_patient_facing_summary(conv: Conversation, transcript_text: str) -> None:
@@ -79,6 +80,56 @@ def _save_transcript(conv_id: str, segments: list, language: str | None = None) 
             line_order=i,
         )
         db.session.add(line)
+
+
+def _field_blank(val) -> bool:
+    """True when extraction / DB field has no usable text."""
+    if val is None:
+        return True
+    s = str(val).strip().lower()
+    return s == "" or s in ("null", "none")
+
+
+def _merge_parent_summary_into_extraction(conv: Conversation, extraction: dict) -> dict:
+    """
+    For continuation sessions (parent_id set), copy stable demographics from the
+    parent's Summary when this visit's transcript did not repeat them.
+
+    Child extraction wins whenever it already has a value.
+    """
+    if not extraction or extraction.get("skipped") or extraction.get("error"):
+        return extraction
+    pid = getattr(conv, "parent_id", None)
+    if not pid:
+        return extraction
+    parent = Conversation.query.get(pid)
+    if not parent or not parent.summary:
+        return extraction
+
+    ps = parent.summary
+    parent_entities = ps.extracted_entities if isinstance(ps.extracted_entities, dict) else {}
+
+    def fill(child_json_key: str, summary_column: str, entity_keys: tuple[str, ...]) -> None:
+        if not _field_blank(extraction.get(child_json_key)):
+            return
+        val = getattr(ps, summary_column, None)
+        if _field_blank(val):
+            for ek in entity_keys:
+                ev = parent_entities.get(ek)
+                if not _field_blank(ev):
+                    val = ev
+                    break
+        if not _field_blank(val):
+            extraction[child_json_key] = val
+
+    fill("Name", "patient_name", ("Name",))
+    fill("Age", "patient_age", ("Age",))
+    fill("Gender", "patient_gender", ("Gender",))
+    fill("Education", "education", ("Education",))
+    # Same patient thread — carry diagnosis forward only if this extract left it blank.
+    fill("Disease", "disease", ("Disease",))
+
+    return extraction
 
 
 def _save_summary(conv_id: str, extraction: dict, followups: list | None = None) -> None:
@@ -498,11 +549,12 @@ def update_summary(conv_id: str):
         return jsonify({"error": "Record is approved and locked."}), 403
 
     data = request.get_json() or {}
-    allowed = {
+    allowed_text = {
         "patient_name", "patient_age", "patient_gender",
         "disease", "education", "emotional_state", "additional_notes",
-        "patient_facing_summary",
+        "patient_facing_summary", "prescription_instructions",
     }
+    allowed_json = {"prescription_medicines", "prescription_tests"}
 
     try:
         summary = conv.summary
@@ -511,9 +563,14 @@ def update_summary(conv_id: str):
             summary = Summary(conversation_id=conv_id)
             db.session.add(summary)
 
-        for field in allowed:
+        for field in allowed_text:
             if field in data:
                 setattr(summary, field, (data[field] or "").strip() or None)
+
+        for field in allowed_json:
+            if field in data:
+                val = data[field]
+                setattr(summary, field, val if isinstance(val, list) else None)
 
         _generate_field_reminders(summary)
         log_action("summary_updated", "conversation", conv_id)
@@ -718,13 +775,14 @@ def export_pdf(conv_id: str):
 @require_auth
 def continue_session(conv_id: str):
     """
-    Create a new 'continuation' conversation linked to an existing completed one.
-    The continuation is a standard live session but pre-linked via parent_id so
-    the frontend can:
-      - Show the original's follow-up questions as context
-      - Append the new transcript to the parent after completion
+    Create a continuation conversation linked to an existing completed one.
 
-    Returns the new conversation's session_id so LiveSessionPage can use it.
+    Returns:
+      session_id           — new conversation ID to pass to /live?continue=
+      parent_id            — the original conversation ID
+      context_seed         — capped tail of parent transcript (fed to Whisper rolling prompt)
+      parent_summary       — extracted medical fields from parent (shown as context card)
+      follow_up_questions  — AI-generated questions from parent (shown as checklist)
     """
     if not _db_available():
         return jsonify({"error": "Database not configured"}), 503
@@ -748,10 +806,80 @@ def continue_session(conv_id: str):
         )
         db.session.add(cont)
         db.session.commit()
-        return jsonify({"session_id": cont.id, "parent_id": conv_id}), 201
+
+        # ── Build context seed from parent transcript ──────────────────────
+        # Tail of the parent's raw transcript is passed to Whisper as rolling
+        # prompt context on the first chunk of the new session.
+        context_seed = ""
+        if parent.transcript:
+            full_text = (parent.transcript.raw_text or "").strip()
+            max_ctx = whisper_service.WHISPER_ROLLING_CONTEXT_MAX
+            context_seed = full_text[-max_ctx:] if full_text else ""
+
+        # ── Build parent summary context for the sidebar card ──────────────
+        parent_summary = {}
+        follow_up_questions = []
+        if parent.summary:
+            s = parent.summary
+            parent_summary = {
+                "patient_name":    s.patient_name,
+                "patient_age":     s.patient_age,
+                "patient_gender":  s.patient_gender,
+                "disease":         s.disease,
+                "additional_notes": s.additional_notes,
+                "emotional_state": s.emotional_state,
+            }
+            follow_up_questions = s.follow_up_questions or []
+
+        return jsonify({
+            "session_id":           cont.id,
+            "parent_id":            conv_id,
+            "context_seed":         context_seed,
+            "parent_summary":       parent_summary,
+            "follow_up_questions":  follow_up_questions,
+        }), 201
+
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": str(e)}), 500
+
+
+@conversations_bp.route("/<string:conv_id>/continuations", methods=["GET"])
+@require_auth
+def list_continuations(conv_id: str):
+    """
+    Return all follow-up sessions that have this conversation as their parent.
+    Used by SessionDetailPage to show "Follow-up sessions" on the parent card,
+    and "Continuing from" metadata on the child card.
+    """
+    if not _db_available():
+        return jsonify({"continuations": []}), 200
+
+    parent = Conversation.query.get(conv_id)
+    if not parent or parent.deleted_at:
+        return jsonify({"error": "Session not found"}), 404
+    if parent.user_id and parent.user_id != g.user_id and g.user_role != "admin":
+        return jsonify({"error": "Access denied"}), 403
+
+    children = (
+        Conversation.query
+        .filter_by(parent_id=conv_id)
+        .filter(Conversation.deleted_at.is_(None))
+        .order_by(Conversation.created_at.asc())
+        .all()
+    )
+
+    return jsonify({
+        "continuations": [
+            {
+                "id":         c.id,
+                "title":      c.title,
+                "status":     c.status,
+                "created_at": c.created_at.isoformat() if c.created_at else None,
+            }
+            for c in children
+        ]
+    }), 200
 
 
 # ── Utility ──────────────────────────────────────────────────────────────────

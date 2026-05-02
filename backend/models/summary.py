@@ -39,6 +39,11 @@ class Summary(db.Model):
     emotional_state = db.Column(db.String(255), nullable=True)
     additional_notes = db.Column(db.Text, nullable=True)
 
+    # Doctor's prescription — entered manually by the doctor
+    prescription_medicines     = db.Column(db.JSON, nullable=True)   # list[str]
+    prescription_tests         = db.Column(db.JSON, nullable=True)   # list[str]
+    prescription_instructions  = db.Column(db.Text, nullable=True)
+
     # AI-generated follow-up questions for the next visit
     follow_up_questions = db.Column(db.JSON, nullable=True)   # list[str]
 
@@ -67,6 +72,9 @@ class Summary(db.Model):
             "education": self.education,
             "emotional_state": self.emotional_state,
             "additional_notes": self.additional_notes,
+            "prescription_medicines":    self.prescription_medicines    or [],
+            "prescription_tests":        self.prescription_tests        or [],
+            "prescription_instructions": self.prescription_instructions,
             "follow_up_questions": self.follow_up_questions or [],
             "patient_facing_summary": self.patient_facing_summary,
             "created_at": self.created_at.isoformat() if self.created_at else None,

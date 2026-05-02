@@ -132,9 +132,12 @@ export function useMediaRecorder(options: UseMediaRecorderOptions = {}) {
         throw new Error('Microphone access not supported (requires HTTPS or localhost).')
       }
       const did = overrideDeviceId ?? defaultDeviceId
-      const audioConstraints: MediaTrackConstraints | boolean = did
-        ? { deviceId: { exact: did } }
-        : true
+      const audioConstraints: MediaTrackConstraints = {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl:  true,
+        ...(did ? { deviceId: { exact: did } } : {}),
+      }
       const stream = streamRef.current
         ?? (await navigator.mediaDevices.getUserMedia({ audio: audioConstraints }))
       streamRef.current = stream

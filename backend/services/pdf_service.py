@@ -20,7 +20,7 @@ import io
 import os
 import urllib.request
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
     from models.conversation import Conversation
@@ -37,6 +37,51 @@ from reportlab.platypus import (
 
 from config import Config
 from services.pdf_theme import resolve_pdf_theme, make_styles, PdfThemeResolved
+
+
+def _pdf_field_nonempty(val) -> bool:
+    return val is not None and str(val).strip() != ""
+
+
+def _patient_demographics_for_pdf(conv: "Conversation", summary) -> dict[str, Any]:
+    """
+    Resolve header demographics: prefer this session's Summary, then linked Patient
+    chart, then parent session Summary (continuation visits).
+    """
+    name = age = gender = None
+    if summary:
+        name = summary.patient_name
+        age = summary.patient_age
+        gender = summary.patient_gender
+
+    pat = getattr(conv, "patient", None)
+    if pat:
+        if not _pdf_field_nonempty(name):
+            name = pat.name
+        if not _pdf_field_nonempty(age):
+            age = pat.age
+        if not _pdf_field_nonempty(gender):
+            gender = pat.gender
+
+    pid = getattr(conv, "parent_id", None)
+    if pid and (
+        not _pdf_field_nonempty(name)
+        or not _pdf_field_nonempty(age)
+        or not _pdf_field_nonempty(gender)
+    ):
+        from models.conversation import Conversation as ConvModel
+
+        parent = ConvModel.query.get(pid)
+        if parent and parent.summary:
+            ps = parent.summary
+            if not _pdf_field_nonempty(name):
+                name = ps.patient_name
+            if not _pdf_field_nonempty(age):
+                age = ps.patient_age
+            if not _pdf_field_nonempty(gender):
+                gender = ps.patient_gender
+
+    return {"name": name, "age": age, "gender": gender}
 
 _BRANDING_URL_PREFIX = "/api/users/branding/"
 
@@ -878,10 +923,11 @@ def generate_session_pdf(conv: "Conversation", audience: str = "clinical") -> by
     story.append(Spacer(1, 0.25 * cm))
 
     summary = conv.summary
+    demo = _patient_demographics_for_pdf(conv, summary)
     _build_patient_block(story, {
-        "name":     (summary.patient_name   if summary else None),
-        "age":      (summary.patient_age    if summary else None),
-        "gender":   (summary.patient_gender if summary else None),
+        "name":     demo.get("name"),
+        "age":      demo.get("age"),
+        "gender":   demo.get("gender"),
         "date":     conv.created_at.strftime("%d %b %Y") if conv.created_at else None,
         "duration": _fmt_duration(conv.duration),
         "language": conv.language,

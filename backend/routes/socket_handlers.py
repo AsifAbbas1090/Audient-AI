@@ -94,9 +94,8 @@ def handle_disconnect():
 # Module-level dict: { sid: { user_id, role } }
 _socket_meta: dict = {}
 
-# Rolling transcript context per session — last ~300 chars of text sent to Whisper
-# as an initial_prompt so each chunk continues naturally from the previous one.
-_session_context: dict = {}  # session_id → str
+# Rolling transcript context per session — bounded tail sent as Whisper prompt context.
+_session_context: dict = {}  # session_id → str (≤ whisper_service.WHISPER_ROLLING_CONTEXT_MAX)
 
 
 # ── Session room ──────────────────────────────────────────────────────────────
@@ -131,7 +130,8 @@ def handle_audio_chunk(data):
 
     audio_bytes    = data.get("audio")
     session_id     = (data.get("session_id")     or "").strip()
-    lang_hint      = (data.get("language")       or "").strip()
+    lang_hint_raw  = (data.get("language")       or "").strip()
+    lang_hint      = whisper_service.normalize_language(lang_hint_raw)
     is_final       = bool(data.get("is_final"))
     forced_speaker = (data.get("forced_speaker") or "").strip()  # dual-mic override
 
@@ -158,7 +158,7 @@ def handle_audio_chunk(data):
         result   = whisper_service.transcribe(
             tmp_path,
             task="translate",
-            language_hint=lang_hint or None,
+            language_hint=lang_hint,
             context=prior_context or None,
         )
         segments = result.get("segments", [])
@@ -171,7 +171,9 @@ def handle_audio_chunk(data):
         if session_id:
             new_text = " ".join(s.get("text", "").strip() for s in segments)
             combined = f"{prior_context} {new_text}".strip()
-            _session_context[session_id] = combined[-300:]  # keep last ~300 chars
+            _session_context[session_id] = combined[
+                -whisper_service.WHISPER_ROLLING_CONTEXT_MAX:
+            ]
 
         # ── Dual-mic: override speaker label when forced_speaker is set ──
         # The patient mic sends chunks tagged with forced_speaker="Patient"
@@ -181,10 +183,18 @@ def handle_audio_chunk(data):
                 seg["speaker"] = forced_speaker
 
         # ── Audio accumulation for pyannote (if HF_TOKEN configured) ────
-        # Skip accumulation for patient mic — pyannote runs on doctor audio only
+        # Runs in a daemon thread so FFmpeg conversion never blocks the WebSocket
+        # event loop.  audio_service.append_chunk_to_session owns and deletes
+        # the file, so we clear tmp_path to prevent the finally block from racing.
         if Config.HF_TOKEN and session_id and not forced_speaker and audio_service.session_exists(session_id):
-            audio_service.append_chunk_to_session(session_id, tmp_path)
-            tmp_path = None  # audio_service now owns the file
+            import threading
+            chunk_for_thread = tmp_path
+            tmp_path = None  # thread now owns the file
+            threading.Thread(
+                target=audio_service.append_chunk_to_session,
+                args=(session_id, chunk_for_thread),
+                daemon=True,
+            ).start()
 
         # ── Push transcript back to this client ──────────────────────────
         emit("transcript_update", {
@@ -250,8 +260,12 @@ def handle_request_diarize(data):
 
         # ── Path 2: Groq LLM text-based ──────────────────────────────────
         if Config.GROQ_API_KEY and len(segments) >= 2:
-            from services.diarize_service import diarize_with_groq
-            labeled = diarize_with_groq(segments)
+            from services.diarize_service import diarize_with_groq, split_segments_by_sentence
+            # Expand multi-sentence segments before labelling — the LLM assigns
+            # speakers per sentence, which dramatically improves accuracy when
+            # Whisper returns a few large chunks instead of many short ones.
+            expanded = split_segments_by_sentence(segments)
+            labeled = diarize_with_groq(expanded)
             emit("diarize_update", {"segments": labeled, "method": "groq_llm"})
 
     except Exception as exc:

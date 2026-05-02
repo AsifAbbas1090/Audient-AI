@@ -23,6 +23,15 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { io, Socket }        from 'socket.io-client'
 import { useMediaRecorder }  from './useMediaRecorder'
 
+/** WS audio_chunk: only ISO-style hints — never UI strings like "English (translated)". */
+function languageHintForSocket(label: string): string | undefined {
+  const t = label.trim()
+  if (!t || t === 'Unknown') return undefined
+  if (/translat/i.test(t) || /[→]/.test(t) || /->/.test(t)) return undefined
+  if (/^[a-zA-Z]{2,3}$/.test(t)) return t.toLowerCase()
+  return undefined
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 export type Segment = {
   id:          number
@@ -44,6 +53,12 @@ export type LiveFields = {
   [key: string]:    unknown
 }
 
+/** Correction emitted by the LLM speaker-correction checkpoint. */
+export type LlmCorrection = { id: number; speaker: 'Doctor' | 'Patient' }
+
+/** Which raw diarization label maps to which clinical role (built up over successive passes). */
+type SpeakerContext = { doctor_label: string | null; patient_label: string | null }
+
 type RawSegment = {
   speaker?: string
   text?:    string
@@ -52,10 +67,12 @@ type RawSegment = {
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-const CHUNK_MS     = 4_000   // send interval: assemble + ship a 4s window blob every 4s
-const WINDOW_SUBS  = 8       // 8 × 500ms timeslice = 4s audio per Whisper request
-const DIARIZE_MS   = 15_000  // diarize interval
-const EXTRACT_MS   = 60_000  // incremental extraction interval
+const CHUNK_MS         = 4_000   // send interval: assemble + ship a window blob every 4s
+const WINDOW_SUBS      = 10      // 10 × 500ms = 5s audio per Whisper request (1s overlap with prior send)
+const DIARIZE_MS       = 15_000  // diarize interval
+const EXTRACT_MS       = 60_000  // incremental extraction interval
+const LLM_CORRECT_MS   = 25_000  // LLM speaker-correction interval
+const LLM_CORRECT_WINDOW = 30    // sliding window: max segments sent per LLM call
 
 // Socket.IO must hit the same origin as the SPA in dev (e.g. :3000) so Vite can
 // proxy /socket.io → Flask. Connecting straight to :5000 bypasses the proxy and
@@ -78,13 +95,15 @@ let _idCounter = 0
 
 // ── Hook ──────────────────────────────────────────────────────────────────────
 export function useLiveSession(opts: {
-  onTranscriptUpdate: (newSegs: Segment[]) => void
-  onDiarizeUpdate:    (allSegs: RawSegment[]) => void
-  onLanguage?:        (lang: string) => void
-  onError?:           (msg: string) => void
-  onChunkSent?:       () => void   // fires the moment audio is sent — use to show typing indicator
-  doctorDeviceId?:    string   // optional: specific doctor microphone
-  patientDeviceId?:   string   // optional: enables dual-channel patient mic
+  onTranscriptUpdate:  (newSegs: Segment[]) => void
+  onDiarizeUpdate:     (allSegs: RawSegment[]) => void
+  onLlmCorrectUpdate?: (corrections: LlmCorrection[]) => void
+  onLanguage?:         (lang: string) => void
+  onError?:            (msg: string) => void
+  onChunkSent?:        () => void   // fires the moment audio is sent — use to show typing indicator
+  doctorDeviceId?:     string   // optional: specific doctor microphone
+  patientDeviceId?:    string   // optional: enables dual-channel patient mic
+  contextSeed?:        string   // optional: last ~500 chars of parent transcript for continuation sessions
 }) {
   const [connected,  setConnected]  = useState(false)
   const [sessionId,  setSessionId]  = useState<string | null>(null)
@@ -97,16 +116,19 @@ export function useLiveSession(opts: {
   const timeOffsetRef      = useRef(0)
   const detectedLangRef    = useRef<string>('Unknown')
 
-  const chunkIntervalRef   = useRef<ReturnType<typeof setInterval> | null>(null)
-  const patientIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const diarizeIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const extractIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const segmentsRef        = useRef<Segment[]>([])
+  const chunkIntervalRef      = useRef<ReturnType<typeof setInterval> | null>(null)
+  const patientIntervalRef    = useRef<ReturnType<typeof setInterval> | null>(null)
+  const diarizeIntervalRef    = useRef<ReturnType<typeof setInterval> | null>(null)
+  const extractIntervalRef    = useRef<ReturnType<typeof setInterval> | null>(null)
+  const llmCorrectIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const segmentsRef           = useRef<Segment[]>([])
+  const speakerContextRef     = useRef<SpeakerContext | null>(null)
 
   // Two recorders: doctor (always) + patient (dual-mic only).
   // timeslice=500ms → continuous recording; getWindowBlob(WINDOW_SUBS) assembles each send.
-  const doctorRec  = useMediaRecorder({ mimeType: 'audio/webm', timeslice: 500 })
-  const patientRec = useMediaRecorder({ mimeType: 'audio/webm', timeslice: 500 })
+  // Opus at 32kbps is optimal for speech: small chunks, high intelligibility.
+  const doctorRec  = useMediaRecorder({ mimeType: 'audio/webm;codecs=opus', timeslice: 500, audioBitsPerSecond: 32_000 })
+  const patientRec = useMediaRecorder({ mimeType: 'audio/webm;codecs=opus', timeslice: 500, audioBitsPerSecond: 32_000 })
 
   // ── Socket connection ────────────────────────────────────────────────────────
   const connect = useCallback(() => {
@@ -115,11 +137,9 @@ export function useLiveSession(opts: {
     const token  = localStorage.getItem('jwt_token')
     const socket = io(SOCKET_ORIGIN(), {
       auth:  { token },
-      // In dev, Vite's http-proxy can't forward the Socket.IO WebSocket upgrade
-      // handshake correctly — the "Invalid frame header" error is Vite dropping the
-      // WS frame.  Polling is equally fast for local dev and has no proxy issues.
-      // In production the server serves the frontend directly so WS works fine.
-      transports:           import.meta.env.DEV ? ['polling'] : ['polling', 'websocket'],
+      // Vite proxies /socket.io with ws:true so WebSocket works in dev too.
+      // Start with polling for the handshake then upgrade — same behaviour in dev and prod.
+      transports:           ['polling', 'websocket'],
       reconnection:         true,
       reconnectionAttempts: 5,
       reconnectionDelay:    1_000,
@@ -189,7 +209,7 @@ export function useLiveSession(opts: {
     socketRef.current.emit('audio_chunk', {
       session_id:     sessionIdRef.current,
       audio:          buffer,
-      language:       detectedLangRef.current !== 'Unknown' ? detectedLangRef.current : undefined,
+      language:       languageHintForSocket(detectedLangRef.current),
       is_final:       isFinal,
       forced_speaker: forcedSpeaker,
     })
@@ -232,6 +252,50 @@ export function useLiveSession(opts: {
     }
   }, [])
 
+  // ── LLM speaker-correction checkpoint ─────────────────────────────────────────
+  const requestLlmCorrect = useCallback(async () => {
+    const segs = segmentsRef.current
+    if (!sessionIdRef.current || segs.length < 4) return   // need enough context
+
+    // Sliding window — only the most recent segments, not the full growing list
+    const window = segs.slice(-LLM_CORRECT_WINDOW).map(s => ({
+      id:      s.id,
+      speaker: s.speaker,
+      text:    s.text,
+    }))
+
+    try {
+      const token   = localStorage.getItem('jwt_token')
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      if (token) headers['Authorization'] = `Bearer ${token}`
+
+      const res = await fetch(`${API_ROOT()}/api/session/llm_correct`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          session_id: sessionIdRef.current,
+          segments:   window,
+          context:    speakerContextRef.current,
+        }),
+      })
+      if (!res.ok) return
+      const data = await res.json() as {
+        corrections?: LlmCorrection[]
+        context?:     SpeakerContext
+        skipped?:     boolean
+        error?:       string
+      }
+      if (data.skipped || data.error || !data.corrections?.length) return
+
+      // Persist updated context for the next call
+      if (data.context) speakerContextRef.current = data.context
+
+      opts.onLlmCorrectUpdate?.(data.corrections)
+    } catch {
+      // Non-critical — a failed correction pass is silently ignored
+    }
+  }, [])  // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── Helper: start all polling intervals ───────────────────────────────────────
   // Timeslice mode: getWindowBlob() is synchronous — no async, no busy guards needed.
   const _startIntervals = useCallback(() => {
@@ -256,42 +320,60 @@ export function useLiveSession(opts: {
 
     // Incremental field extraction
     extractIntervalRef.current = setInterval(runExtract, EXTRACT_MS)
-  }, [sendChunk, requestDiarize, runExtract, opts.patientDeviceId, doctorRec, patientRec])
+
+    // LLM speaker-correction checkpoint — starts after 15 s so the first pass
+    // has enough context to reliably distinguish Doctor from Patient.
+    // Subsequent passes run every LLM_CORRECT_MS (25 s) with rolling context.
+    setTimeout(() => {
+      if (llmCorrectIntervalRef.current !== null) return  // already cleared (session ended)
+      requestLlmCorrect()  // immediate first run after warm-up
+      llmCorrectIntervalRef.current = setInterval(requestLlmCorrect, LLM_CORRECT_MS)
+    }, 15_000)
+  }, [sendChunk, requestDiarize, runExtract, requestLlmCorrect, opts.patientDeviceId, doctorRec, patientRec])
 
   // ── Helper: clear all polling intervals ───────────────────────────────────────
   const _clearIntervals = useCallback(() => {
-    if (chunkIntervalRef.current)   clearInterval(chunkIntervalRef.current)
-    if (patientIntervalRef.current) clearInterval(patientIntervalRef.current)
-    if (diarizeIntervalRef.current) clearInterval(diarizeIntervalRef.current)
-    if (extractIntervalRef.current) clearInterval(extractIntervalRef.current)
-    chunkIntervalRef.current   = null
-    patientIntervalRef.current = null
-    diarizeIntervalRef.current = null
-    extractIntervalRef.current = null
+    if (chunkIntervalRef.current)      clearInterval(chunkIntervalRef.current)
+    if (patientIntervalRef.current)    clearInterval(patientIntervalRef.current)
+    if (diarizeIntervalRef.current)    clearInterval(diarizeIntervalRef.current)
+    if (extractIntervalRef.current)    clearInterval(extractIntervalRef.current)
+    if (llmCorrectIntervalRef.current) clearInterval(llmCorrectIntervalRef.current)
+    chunkIntervalRef.current      = null
+    patientIntervalRef.current    = null
+    diarizeIntervalRef.current    = null
+    extractIntervalRef.current    = null
+    llmCorrectIntervalRef.current = null
   }, [])
 
   // ── Start ─────────────────────────────────────────────────────────────────────
   const startSession = useCallback(async (overrideSessionId?: string): Promise<string | null> => {
     connect()
 
-    // Create server-side session (DB row + audio accumulation slot),
-    // unless a pre-created session ID is provided (continuation mode).
+    // Register the session with the backend (creates DB row + audio accumulation slot).
+    // For continuation sessions, pass the pre-created ID and context_seed so the
+    // backend pre-loads the Whisper rolling prompt before the first chunk arrives.
     let id: string | null = overrideSessionId ?? null
-    if (!id) {
-      try {
-        const token   = localStorage.getItem('jwt_token')
-        const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-        if (token) headers['Authorization'] = `Bearer ${token}`
-        const res  = await fetch(`${API_ROOT()}/api/session/start`, { method: 'POST', headers })
-        const json = await res.json() as { session_id?: string }
-        id = json.session_id ?? null
-      } catch { /* session ID is optional — transcription works without it */ }
-    }
+    try {
+      const token   = localStorage.getItem('jwt_token')
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      if (token) headers['Authorization'] = `Bearer ${token}`
+      const body: Record<string, string> = {}
+      if (id) body.session_id = id
+      if (opts.contextSeed) body.context_seed = opts.contextSeed
+      const res  = await fetch(`${API_ROOT()}/api/session/start`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      })
+      const json = await res.json() as { session_id?: string }
+      id = json.session_id ?? id
+    } catch { /* session ID is optional — transcription works without it */ }
 
     setSessionId(id)
     sessionIdRef.current    = id
     detectedLangRef.current = 'Unknown'
     timeOffsetRef.current   = 0
+    speakerContextRef.current = null   // fresh session — reset accumulated speaker context
     setLiveFields({})
 
     if (id) {
@@ -389,5 +471,7 @@ export function useLiveSession(opts: {
     // Audio (doctor recorder)
     getBlob: doctorRec.getBlob,
     chunks:  doctorRec.chunks,
+    // Socket access — used by LiveSessionPage to subscribe to session_ready push
+    socket:  socketRef,
   }
 }

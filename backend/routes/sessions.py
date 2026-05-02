@@ -6,7 +6,7 @@ Session routes:
 import uuid
 from flask import Blueprint, request, jsonify, g
 from config import Config
-from services import audio_service, diarize_service
+from services import audio_service, diarize_service, whisper_service
 from utils.auth import optional_auth
 
 sessions_bp = Blueprint("sessions", __name__)
@@ -18,10 +18,27 @@ def session_start():
     """
     Create a new session for accumulating audio chunks.
     Returns a session_id the frontend passes with every chunk.
-    If authenticated, associates the session with the user's account.
+
+    Optional body fields:
+      session_id    — pre-created ID to reuse (e.g. from /continue endpoint)
+      context_seed  — tail of a parent session's transcript (capped); pre-loaded
+                      into the rolling Whisper prompt so the first chunk starts
+                      in-context rather than cold.
     """
-    session_id = str(uuid.uuid4())
+    body = request.get_json(silent=True) or {}
+
+    # Use a pre-created ID when continuing from an existing session, otherwise generate fresh
+    session_id = (body.get("session_id") or "").strip() or str(uuid.uuid4())
     audio_service.create_session(session_id)
+
+    # Pre-seed the Whisper rolling context so the first chunk of a follow-up
+    # session continues naturally from the end of the parent transcript.
+    context_seed = (body.get("context_seed") or "").strip()
+    if context_seed:
+        from routes.socket_handlers import _session_context
+        max_ctx = whisper_service.WHISPER_ROLLING_CONTEXT_MAX
+        _session_context[session_id] = context_seed[-max_ctx:]
+        print(f"[session/start] Seeded context for {session_id[:8]} ({len(context_seed)} chars)")
 
     # Persist a Conversation record when DB is configured (with or without auth)
     user_id = getattr(g, "user_id", None)
@@ -29,10 +46,12 @@ def session_start():
         try:
             from extensions import db
             from models.conversation import Conversation
-            conv = Conversation(id=session_id, user_id=user_id, status="processing", is_offline=False)
-            db.session.add(conv)
-            db.session.commit()
-            print(f"[session/start] Conversation {session_id} created (user_id={user_id})")
+            # Only create a new row if one doesn't already exist (pre-created by /continue)
+            if not Conversation.query.get(session_id):
+                conv = Conversation(id=session_id, user_id=user_id, status="processing", is_offline=False)
+                db.session.add(conv)
+                db.session.commit()
+                print(f"[session/start] Conversation {session_id} created (user_id={user_id})")
         except Exception as e:
             db.session.rollback()
             print(f"[session/start] Could not persist conversation: {e}")
@@ -139,3 +158,36 @@ def log_correction():
             pass  # non-critical — correction is already applied in the frontend
 
     return jsonify({"logged": True}), 200
+
+
+@sessions_bp.route("/api/session/llm_correct", methods=["POST"])
+@optional_auth
+def session_llm_correct():
+    """
+    POST /api/session/llm_correct
+
+    Background LLM speaker-correction checkpoint.  Called by the frontend
+    every ~25 s during a live session with a sliding window of recent segments.
+
+    Body:
+      session_id  — active session UUID
+      segments    — list of {id, speaker, text}  (last N, max 30)
+      context     — optional {"doctor_label": str, "patient_label": str}
+
+    Returns:
+      {"corrections": [{id, speaker}, ...], "context": {...}}
+      or {"skipped": true} / {"error": "..."}
+    """
+    data       = request.get_json() or {}
+    session_id = (data.get("session_id") or "").strip()
+    segments   = data.get("segments") or []
+    context    = data.get("context") or None
+
+    if not session_id:
+        return jsonify({"error": "session_id required"}), 400
+    if not segments:
+        return jsonify({"skipped": True, "reason": "No segments"}), 200
+
+    from services import llm_correct_service
+    result = llm_correct_service.correct_speakers(segments, context)
+    return jsonify(result), 200

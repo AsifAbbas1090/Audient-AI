@@ -50,6 +50,8 @@ def process_session_task(
     language: str,
     duration: int | None,
 ):
+    from app import app as flask_app
+    flask_app.app_context().push()
     from extensions import db
     from models.conversation import Conversation
     from services.diarize_service import diarize_with_groq, split_segments_by_sentence
@@ -60,6 +62,7 @@ def process_session_task(
         _save_summary,
         _generate_field_reminders,
         _auto_title,
+        _merge_parent_summary_into_extraction,
     )
 
     conv = Conversation.query.get(conv_id)
@@ -136,6 +139,8 @@ def process_session_task(
         )
 
         if good_extraction:
+            extraction = _merge_parent_summary_into_extraction(conv, extraction)
+
             if conv.summary:
                 db.session.delete(conv.summary)
                 db.session.flush()
@@ -196,6 +201,15 @@ def process_session_task(
         print(f"[task] {conv_id} complete in {elapsed()}")
 
         _send_notifications(conv)
+
+        # Push a WebSocket event so the frontend can navigate immediately
+        # instead of waiting for the 2-second HTTP poll cycle.
+        try:
+            from extensions import socketio
+            socketio.emit("session_ready", {"conversation_id": conv_id}, room=conv_id)
+        except Exception as e:
+            print(f"[task] session_ready emit failed: {e}")
+
         return {"success": True, "conversation_id": conv_id}
 
     except Exception as exc:

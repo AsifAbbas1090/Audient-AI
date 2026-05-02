@@ -8,6 +8,7 @@ import {
   Sparkles, FlaskConical, Stethoscope, TriangleAlert, RefreshCw,
   UserSearch, UserPlus, Phone, Link2, Unlink, LayoutTemplate,
   MessageSquare, Shield, Send, ChevronDown, Trash2,
+  Pill, ClipboardList, TestTube,
 } from 'lucide-react'
 import { Sidebar }       from '../components/ui/Sidebar'
 import { Button }        from '../components/ui/Button'
@@ -49,8 +50,17 @@ interface SummaryFields {
 }
 
 interface Summary extends SummaryFields {
-  field_reminders:      FieldReminder[]
-  follow_up_questions?: string[]
+  field_reminders:             FieldReminder[]
+  follow_up_questions?:        string[]
+  prescription_medicines?:     string[]
+  prescription_tests?:         string[]
+  prescription_instructions?:  string | null
+}
+
+interface PrescriptionDraft {
+  medicines:    string[]
+  tests:        string[]
+  instructions: string
 }
 
 interface Recommendations {
@@ -222,6 +232,11 @@ export default function SessionDetailPage() {
   })
   const [savingSummary, setSavingSummary] = useState(false)
 
+  // Prescription editing
+  const [editingRx,  setEditingRx]  = useState(false)
+  const [rxDraft,    setRxDraft]    = useState<PrescriptionDraft>({ medicines: [], tests: [], instructions: '' })
+  const [savingRx,   setSavingRx]   = useState(false)
+
   // Phase 2/3 — consult modal
   const [showConsultModal, setShowConsultModal] = useState(false)
 
@@ -245,6 +260,11 @@ export default function SessionDetailPage() {
   const [commentDraft,   setCommentDraft]   = useState('')
   const [postingComment, setPostingComment] = useState(false)
 
+  // Continuation linkage
+  type ContinuationItem = { id: string; title: string | null; status: string; created_at: string }
+  const [continuations,  setContinuations]  = useState<ContinuationItem[]>([])
+  const [parentConv,     setParentConv]     = useState<{ id: string; title: string | null } | null>(null)
+
   useEffect(() => {
     if (!id) return
     setLoading(true)
@@ -264,6 +284,22 @@ export default function SessionDetailPage() {
   useEffect(() => {
     if (editingTitle) titleInputRef.current?.focus()
   }, [editingTitle])
+
+  // Fetch follow-up sessions created from this one
+  useEffect(() => {
+    if (!id) return
+    api.get<{ continuations: ContinuationItem[] }>(`/api/conversations/${id}/continuations`)
+      .then(r => setContinuations(r.data.continuations ?? []))
+      .catch(() => {})
+  }, [id])
+
+  // Fetch parent session title when this is a continuation
+  useEffect(() => {
+    if (!conv?.parent_id) return
+    api.get<{ conversation: { id: string; title: string | null } }>(`/api/conversations/${conv.parent_id}`)
+      .then(r => setParentConv({ id: r.data.conversation.id, title: r.data.conversation.title }))
+      .catch(() => {})
+  }, [conv?.parent_id])
 
   // Load grants + comments once conv is available
   const loadGrants = useCallback(async () => {
@@ -351,6 +387,40 @@ export default function SessionDetailPage() {
 
   function cancelEditSummary() {
     setEditingSummary(false)
+  }
+
+  // ── Prescription editing ──────────────────────────────────
+  function startEditRx() {
+    const s = conv?.summary
+    setRxDraft({
+      medicines:    s?.prescription_medicines    ?? [],
+      tests:        s?.prescription_tests        ?? [],
+      instructions: s?.prescription_instructions ?? '',
+    })
+    setEditingRx(true)
+  }
+
+  async function saveRx() {
+    if (!conv) return
+    setSavingRx(true)
+    try {
+      const res = await api.patch(`/api/conversations/${conv.id}/summary`, {
+        prescription_medicines:    rxDraft.medicines.filter(m => m.trim()),
+        prescription_tests:        rxDraft.tests.filter(t => t.trim()),
+        prescription_instructions: rxDraft.instructions,
+      })
+      setConv(prev => prev ? { ...prev, summary: res.data.summary } : prev)
+      setEditingRx(false)
+      toast('Prescription saved', 'success')
+    } catch {
+      toast('Could not save prescription', 'error')
+    } finally {
+      setSavingRx(false)
+    }
+  }
+
+  function cancelEditRx() {
+    setEditingRx(false)
   }
 
   // ── Approval ──────────────────────────────────────────────
@@ -567,7 +637,26 @@ export default function SessionDetailPage() {
     if (!conv || continuingSession) return
     setContinuingSession(true)
     try {
-      const res = await api.post<{ session_id: string }>(`/api/conversations/${conv.id}/continue`)
+      const res = await api.post<{
+        session_id:          string
+        parent_id:           string
+        context_seed:        string
+        parent_summary:      Record<string, string | null>
+        follow_up_questions: string[]
+      }>(`/api/conversations/${conv.id}/continue`)
+
+      // Stash enriched context in sessionStorage so LiveSessionPage can read it
+      // without an extra API round-trip.
+      sessionStorage.setItem(
+        `continue_ctx_${res.data.session_id}`,
+        JSON.stringify({
+          contextSeed:       res.data.context_seed,
+          parentSummary:     res.data.parent_summary,
+          followUpQuestions: res.data.follow_up_questions,
+          parentTitle:       conv.title,
+        }),
+      )
+
       navigate(`/live?continue=${res.data.session_id}&parent=${conv.id}`)
     } catch {
       toast('Could not start continuation session', 'error')
@@ -1100,6 +1189,208 @@ export default function SessionDetailPage() {
                 )}
               </Card>
 
+              {/* Prescription card */}
+              {isOwner && (conv.status === 'complete' || conv.status === 'approved') && (
+                <Card variant="elevated" className="p-5">
+                  <div className="flex items-center justify-between mb-4">
+                    <h2 className="font-semibold text-white light:text-slate-900 text-sm flex items-center gap-2">
+                      <ClipboardList size={14} className="text-emerald-400" />
+                      Doctor's Prescription
+                    </h2>
+                    {!editingRx && conv.status !== 'approved' && (
+                      <button
+                        onClick={startEditRx}
+                        className="flex items-center gap-1 text-xs text-slate-400 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg px-2.5 py-1 transition-colors"
+                      >
+                        <Pencil size={10} />
+                        Edit
+                      </button>
+                    )}
+                    {editingRx && (
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={saveRx}
+                          disabled={savingRx}
+                          className="flex items-center gap-1.5 text-xs text-emerald-400 hover:text-emerald-300 disabled:opacity-50 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-2.5 py-1 transition-colors"
+                        >
+                          {savingRx ? <Loader2 size={10} className="animate-spin" /> : <Check size={10} />}
+                          Save
+                        </button>
+                        <button
+                          onClick={cancelEditRx}
+                          className="flex items-center gap-1 text-xs text-slate-400 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg px-2.5 py-1 transition-colors"
+                        >
+                          <X size={10} />
+                          Cancel
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {editingRx ? (
+                    <div className="space-y-4">
+                      {/* Medicines */}
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <label className="flex items-center gap-1.5 text-[10px] font-semibold text-slate-500 uppercase tracking-wide">
+                            <Pill size={10} />
+                            Medicines
+                          </label>
+                          <button
+                            onClick={() => setRxDraft(d => ({ ...d, medicines: [...d.medicines, ''] }))}
+                            className="flex items-center gap-1 text-[10px] text-brand-400 hover:text-brand-300"
+                          >
+                            <Plus size={10} /> Add
+                          </button>
+                        </div>
+                        <div className="space-y-1.5">
+                          {rxDraft.medicines.map((med, i) => (
+                            <div key={i} className="flex items-center gap-2">
+                              <input
+                                value={med}
+                                onChange={e => setRxDraft(d => {
+                                  const m = [...d.medicines]; m[i] = e.target.value; return { ...d, medicines: m }
+                                })}
+                                placeholder="e.g. Panadol 500mg twice daily"
+                                className="flex-1 bg-white/5 light:bg-white border border-white/10 light:border-slate-200 rounded-lg px-3 py-1.5 text-sm text-white light:text-slate-900 placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-brand-500"
+                              />
+                              <button
+                                onClick={() => setRxDraft(d => ({ ...d, medicines: d.medicines.filter((_, j) => j !== i) }))}
+                                className="text-slate-500 hover:text-red-400 transition-colors"
+                              >
+                                <X size={13} />
+                              </button>
+                            </div>
+                          ))}
+                          {rxDraft.medicines.length === 0 && (
+                            <p className="text-xs text-slate-600 italic">No medicines added yet.</p>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Tests */}
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <label className="flex items-center gap-1.5 text-[10px] font-semibold text-slate-500 uppercase tracking-wide">
+                            <TestTube size={10} />
+                            Tests Ordered
+                          </label>
+                          <button
+                            onClick={() => setRxDraft(d => ({ ...d, tests: [...d.tests, ''] }))}
+                            className="flex items-center gap-1 text-[10px] text-brand-400 hover:text-brand-300"
+                          >
+                            <Plus size={10} /> Add
+                          </button>
+                        </div>
+                        <div className="space-y-1.5">
+                          {rxDraft.tests.map((test, i) => (
+                            <div key={i} className="flex items-center gap-2">
+                              <input
+                                value={test}
+                                onChange={e => setRxDraft(d => {
+                                  const t = [...d.tests]; t[i] = e.target.value; return { ...d, tests: t }
+                                })}
+                                placeholder="e.g. CBC, X-Ray Chest PA"
+                                className="flex-1 bg-white/5 light:bg-white border border-white/10 light:border-slate-200 rounded-lg px-3 py-1.5 text-sm text-white light:text-slate-900 placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-brand-500"
+                              />
+                              <button
+                                onClick={() => setRxDraft(d => ({ ...d, tests: d.tests.filter((_, j) => j !== i) }))}
+                                className="text-slate-500 hover:text-red-400 transition-colors"
+                              >
+                                <X size={13} />
+                              </button>
+                            </div>
+                          ))}
+                          {rxDraft.tests.length === 0 && (
+                            <p className="text-xs text-slate-600 italic">No tests added yet.</p>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Instructions */}
+                      <div>
+                        <label className="flex items-center gap-1.5 text-[10px] font-semibold text-slate-500 uppercase tracking-wide mb-2">
+                          <StickyNote size={10} />
+                          Instructions / Advice
+                        </label>
+                        <textarea
+                          value={rxDraft.instructions}
+                          onChange={e => setRxDraft(d => ({ ...d, instructions: e.target.value }))}
+                          placeholder="e.g. Take rest for 3 days, drink plenty of water, avoid cold drinks…"
+                          rows={3}
+                          className="w-full bg-white/5 light:bg-white border border-white/10 light:border-slate-200 rounded-xl px-3 py-2 text-sm text-white light:text-slate-900 placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-brand-500 resize-none"
+                        />
+                      </div>
+                    </div>
+                  ) : (() => {
+                    const meds  = conv.summary?.prescription_medicines    ?? []
+                    const tests = conv.summary?.prescription_tests        ?? []
+                    const instr = conv.summary?.prescription_instructions
+                    const hasAny = meds.length > 0 || tests.length > 0 || !!instr
+
+                    if (!hasAny) return (
+                      <div className="py-5 text-center">
+                        <ClipboardList size={22} className="mx-auto mb-2 text-slate-600" />
+                        <p className="text-xs text-slate-500">No prescription added yet.</p>
+                        {conv.status !== 'approved' && (
+                          <p className="text-xs text-slate-600 mt-1">Click Edit to add medicines, tests, and instructions.</p>
+                        )}
+                      </div>
+                    )
+
+                    return (
+                      <div className="space-y-4">
+                        {meds.length > 0 && (
+                          <div>
+                            <div className="flex items-center gap-1.5 text-[10px] font-semibold text-emerald-400 uppercase tracking-wide mb-2">
+                              <Pill size={10} />
+                              Medicines
+                            </div>
+                            <ul className="space-y-1">
+                              {meds.map((m, i) => (
+                                <li key={i} className="flex items-start gap-2 text-sm text-slate-300 bg-emerald-500/5 border border-emerald-500/15 rounded-lg px-3 py-2">
+                                  <span className="mt-0.5 shrink-0 opacity-50">·</span>
+                                  {m}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+
+                        {tests.length > 0 && (
+                          <div>
+                            <div className="flex items-center gap-1.5 text-[10px] font-semibold text-sky-400 uppercase tracking-wide mb-2">
+                              <TestTube size={10} />
+                              Tests Ordered
+                            </div>
+                            <ul className="space-y-1">
+                              {tests.map((t, i) => (
+                                <li key={i} className="flex items-start gap-2 text-sm text-slate-300 bg-sky-500/5 border border-sky-500/15 rounded-lg px-3 py-2">
+                                  <span className="mt-0.5 shrink-0 opacity-50">·</span>
+                                  {t}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+
+                        {instr && (
+                          <div>
+                            <div className="flex items-center gap-1.5 text-[10px] font-semibold text-amber-400 uppercase tracking-wide mb-2">
+                              <StickyNote size={10} />
+                              Instructions / Advice
+                            </div>
+                            <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap bg-amber-500/5 border border-amber-500/15 rounded-lg px-3 py-2">
+                              {instr}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })()}
+                </Card>
+              )}
+
               {/* Clinical Insights card */}
               {isOwner && (conv.status === 'complete' || conv.status === 'approved') && (
                 <Card variant="elevated" className="p-5">
@@ -1334,6 +1625,62 @@ export default function SessionDetailPage() {
                   </Card>
                 )
               })()}
+
+              {/* ── Continuing From card (shown when this session is a follow-up) ── */}
+              {parentConv && (
+                <Card variant="elevated" className="p-4">
+                  <h2 className="font-semibold text-white light:text-slate-900 text-sm flex items-center gap-2 mb-3">
+                    <RefreshCw size={13} className="text-violet-400" />
+                    Continuing From
+                  </h2>
+                  <button
+                    onClick={() => navigate(`/session/${parentConv.id}`)}
+                    className="w-full text-left rounded-lg border border-violet-500/20 bg-violet-500/5 hover:bg-violet-500/10 px-3 py-2.5 transition-colors"
+                  >
+                    <p className="text-xs font-medium text-violet-300 truncate">
+                      {parentConv.title ?? 'Untitled Session'}
+                    </p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">View original session →</p>
+                  </button>
+                </Card>
+              )}
+
+              {/* ── Follow-up Sessions card (shown on the parent when children exist) ── */}
+              {continuations.length > 0 && (
+                <Card variant="elevated" className="p-4">
+                  <h2 className="font-semibold text-white light:text-slate-900 text-sm flex items-center gap-2 mb-3">
+                    <RefreshCw size={13} className="text-brand-400" />
+                    Follow-up Sessions
+                    <span className="ml-auto text-[10px] font-normal text-slate-500">{continuations.length}</span>
+                  </h2>
+                  <ul className="space-y-2">
+                    {continuations.map(c => (
+                      <li key={c.id}>
+                        <button
+                          onClick={() => navigate(`/session/${c.id}`)}
+                          className="w-full text-left rounded-lg border border-white/6 bg-white/3 hover:bg-white/6 px-3 py-2 transition-colors"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-xs text-slate-200 truncate">{c.title ?? 'Follow-up Session'}</p>
+                            <span className={`shrink-0 text-[9px] font-semibold px-1.5 py-0.5 rounded-full ${
+                              c.status === 'complete' || c.status === 'approved'
+                                ? 'bg-emerald-500/15 text-emerald-400'
+                                : c.status === 'failed'
+                                  ? 'bg-red-500/15 text-red-400'
+                                  : 'bg-slate-500/15 text-slate-400'
+                            }`}>
+                              {c.status}
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-slate-500 mt-0.5">
+                            {new Date(c.created_at).toLocaleDateString()}
+                          </p>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </Card>
+              )}
 
               {/* Patient card */}
               {isOwner && (

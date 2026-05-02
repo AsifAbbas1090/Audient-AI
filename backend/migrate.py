@@ -253,6 +253,19 @@ MIGRATIONS = [
     """,
     # ── audit_logs / patients — entire tables may be new ──────────────────
     # db.create_all() handles creation below.
+    # ── summaries: doctor prescription fields ─────────────────────────────────
+    """
+    ALTER TABLE summaries
+      ADD COLUMN IF NOT EXISTS prescription_medicines JSON;
+    """,
+    """
+    ALTER TABLE summaries
+      ADD COLUMN IF NOT EXISTS prescription_tests JSON;
+    """,
+    """
+    ALTER TABLE summaries
+      ADD COLUMN IF NOT EXISTS prescription_instructions TEXT;
+    """,
     # ── vocal_command_logs — timestamped audit of every wake-word event ──────────
     """
     CREATE TABLE IF NOT EXISTS vocal_command_logs (
