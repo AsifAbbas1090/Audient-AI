@@ -50,6 +50,8 @@ def process_session_task(
     language: str,
     duration: int | None,
 ):
+    from app import app as flask_app
+    flask_app.app_context().push()
     from extensions import db
     from models.conversation import Conversation
     from services.diarize_service import diarize_with_groq, split_segments_by_sentence
