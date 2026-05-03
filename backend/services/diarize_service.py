@@ -6,9 +6,13 @@ Offline mode (optional): set HF_TOKEN in .env + install pyannote.audio for
 """
 import json
 import re
+import threading
 from typing import List, Dict, Any, Optional
 
 _groq_client = None
+
+_pyannote_ready_event = threading.Event()
+_pyannote_load_lock = threading.Lock()
 
 
 def _get_client():
@@ -20,34 +24,92 @@ def _get_client():
     return _groq_client
 
 
-def split_segments_by_sentence(segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def expand_segments_for_diarization(
+    segments: List[Dict[str, Any]],
+) -> tuple[List[Dict[str, Any]], List[int]]:
     """
     Split multi-sentence segments into one-sentence units with interpolated
-    timestamps.  This gives the LLM diarizer more lines to reason about, which
-    dramatically improves accuracy on single-mic recordings where Whisper often
-    returns 1–3 large segments containing the whole conversation.
+    timestamps. Returns (expanded_rows, group_sizes) where sum(group_sizes)
+    == len(expanded_rows) and len(group_sizes) == len(segments).
+
+    Callers label `expanded_rows` with the LLM, then collapse with
+    `collapse_labeled_segments` so the client/DB keep original segment granularity.
     """
     import re
-    result = []
+
+    result: List[Dict[str, Any]] = []
+    sizes: List[int] = []
     for seg in segments:
         text = (seg.get("text") or "").strip()
-        # Split on sentence-ending punctuation followed by whitespace
         sentences = re.split(r'(?<=[.?!])\s+', text)
         sentences = [s.strip() for s in sentences if s.strip()]
         if len(sentences) <= 1:
             result.append(seg)
+            sizes.append(1)
         else:
             start = float(seg.get("start") or 0)
-            end   = float(seg.get("end")   or 0)
-            dur   = (end - start) / len(sentences)
+            end = float(seg.get("end") or 0)
+            dur = (end - start) / len(sentences)
             for i, sentence in enumerate(sentences):
                 result.append({
                     **seg,
-                    "text":  sentence,
+                    "text": sentence,
                     "start": round(start + i * dur, 3),
-                    "end":   round(start + (i + 1) * dur, 3),
+                    "end": round(start + (i + 1) * dur, 3),
                 })
-    return result
+            sizes.append(len(sentences))
+    return result, sizes
+
+
+def split_segments_by_sentence(segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Split multi-sentence segments for LLM diarization (expanded list only).
+    Prefer `expand_segments_for_diarization` + `collapse_labeled_segments` when
+    you need to map labels back to the original segment list.
+    """
+    expanded, _ = expand_segments_for_diarization(segments)
+    return expanded
+
+
+def collapse_labeled_segments(
+    original: List[Dict[str, Any]],
+    expanded_labeled: List[Dict[str, Any]],
+    group_sizes: List[int],
+) -> List[Dict[str, Any]]:
+    """
+    Merge per-sentence LLM labels back onto the pre-expand segments using
+    length-weighted majority vote within each group.
+    """
+    if len(original) != len(group_sizes) or sum(group_sizes) != len(expanded_labeled):
+        print(
+            f"[Diarize/collapse] mismatch orig={len(original)} sizes_sum={sum(group_sizes)} "
+            f"expanded={len(expanded_labeled)} — returning original speakers unchanged"
+        )
+        return [dict(s) for s in original]
+
+    out: List[Dict[str, Any]] = []
+    j = 0
+    for orig, sz in zip(original, group_sizes):
+        chunk = expanded_labeled[j : j + sz]
+        j += sz
+        speaker = _majority_speaker_labels(chunk)
+        merged = dict(orig)
+        merged["speaker"] = speaker
+        out.append(merged)
+    return out
+
+
+def _majority_speaker_labels(subsegs: List[Dict[str, Any]]) -> str:
+    doc_score = 0.0
+    pat_score = 0.0
+    for s in subsegs:
+        w = float(max(len((s.get("text") or "").strip()), 1))
+        role = (s.get("speaker") or "").lower()
+        if "patient" in role:
+            pat_score += w
+        else:
+            doc_score += w
+    return "Patient" if pat_score > doc_score else "Doctor"
 
 
 _DIARIZE_SYSTEM = (
@@ -140,15 +202,19 @@ def diarize_with_groq(
             segments_text=seg_lines,
         )
 
+        from services.groq_retry import groq_call_with_retry
+
         client = _get_client()
-        resp = client.chat.completions.create(
-            model=Config.GROQ_DIARIZE_MODEL,
-            messages=[
-                {"role": "system", "content": _DIARIZE_SYSTEM},
-                {"role": "user",   "content": prompt},
-            ],
-            max_tokens=len(text_segs) * 20 + 64,
-            temperature=0,
+        resp = groq_call_with_retry(
+            lambda: client.chat.completions.create(
+                model=Config.GROQ_DIARIZE_MODEL,
+                messages=[
+                    {"role": "system", "content": _DIARIZE_SYSTEM},
+                    {"role": "user",   "content": prompt},
+                ],
+                max_tokens=len(text_segs) * 20 + 64,
+                temperature=0,
+            )
         )
         content = (resp.choices[0].message.content or "").strip()
 
@@ -185,31 +251,58 @@ def diarize_with_groq(
         return segments
 
 
+def wait_pyannote_pipeline_ready(timeout: float | None = None) -> bool:
+    """
+    Block until pyannote finished loading (or failed), or timeout expires.
+    When HF_TOKEN is unset, returns True immediately (Groq-only mode).
+    """
+    from config import Config
+
+    if not Config.HF_TOKEN:
+        return True
+    if _pipeline is not None:
+        return True
+    return _pyannote_ready_event.wait(timeout=timeout)
+
+
 def get_pipeline():
     """
     Returns pyannote pipeline if HF_TOKEN is set, else None.
     Requires: pip install pyannote.audio torch torchaudio
     """
     from config import Config
+
     if not Config.HF_TOKEN:
+        _pyannote_ready_event.set()
         return None
 
     global _pipeline
     if _pipeline is not None:
         return _pipeline
 
-    try:
-        from pyannote.audio import Pipeline
-        print("[Diarize] Loading pyannote/speaker-diarization-3.1 ...")
-        _pipeline = Pipeline.from_pretrained(
-            "pyannote/speaker-diarization-3.1",
-            token=Config.HF_TOKEN,
-        )
-        print("[Diarize] Pipeline ready.")
-        return _pipeline
-    except ImportError:
-        print("[Diarize] pyannote.audio not installed — diarization unavailable.")
-        return None
+    with _pyannote_load_lock:
+        if _pipeline is not None:
+            return _pipeline
+        try:
+            from pyannote.audio import Pipeline
+
+            print("[Diarize] Loading pyannote/speaker-diarization-3.1 ...")
+            _pipeline = Pipeline.from_pretrained(
+                "pyannote/speaker-diarization-3.1",
+                token=Config.HF_TOKEN,
+            )
+            print("[Diarize] Pipeline ready.")
+            return _pipeline
+        except ImportError:
+            print("[Diarize] pyannote.audio not installed — diarization unavailable.")
+            _pipeline = None
+            return None
+        except Exception as e:
+            print(f"[Diarize] pyannote load failed: {e}")
+            _pipeline = None
+            return None
+        finally:
+            _pyannote_ready_event.set()
 
 
 _pipeline = None

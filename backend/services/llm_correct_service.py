@@ -163,15 +163,19 @@ def correct_speakers(
     try:
         from groq import Groq
 
+        from services.groq_retry import groq_call_with_retry
+
         client = Groq(api_key=Config.GROQ_API_KEY)
-        resp = client.chat.completions.create(
-            model=Config.GROQ_DIARIZE_MODEL,   # llama-3.3-70b-versatile
-            messages=[
-                {"role": "system", "content": _SYSTEM},
-                {"role": "user",   "content": prompt},
-            ],
-            max_tokens=600,
-            temperature=0,
+        resp = groq_call_with_retry(
+            lambda: client.chat.completions.create(
+                model=Config.GROQ_DIARIZE_MODEL,   # llama-3.3-70b-versatile
+                messages=[
+                    {"role": "system", "content": _SYSTEM},
+                    {"role": "user",   "content": prompt},
+                ],
+                max_tokens=600,
+                temperature=0,
+            )
         )
         raw     = (resp.choices[0].message.content or "").strip()
         corrs   = _parse(raw)

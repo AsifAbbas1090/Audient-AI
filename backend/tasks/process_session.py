@@ -6,20 +6,25 @@ Pipeline — optimised for minimum wall-clock time:
   Phase 1 (parallel)  diarize  ──┐
                       extract  ──┴─► both Groq calls run at the same time
 
-  Phase 2 (serial)    save transcript + create summary row
+  Phase 2 (serial)    save transcript + summary row + field reminders
 
-  Phase 3 (parallel)  followups        ──┐
-                      patient-facing   ──┴─► both Groq calls run at the same time
+  Phase 3            mark complete + session_ready + email
 
-  Phase 4 (serial)    field reminders, mark complete, email
+  Phase 4 (async)    follow-up questions via tasks/enrich_summary.py
 
 Diarization is skipped entirely when the live session already assigned
 Doctor/Patient labels (it diarizes every 15 s during recording).
 """
 from __future__ import annotations
-import time
+
+import gc
 import threading
-from concurrent.futures import ThreadPoolExecutor, wait, FIRST_EXCEPTION
+import time
+from concurrent.futures import ThreadPoolExecutor
+
+from celery.exceptions import SoftTimeLimitExceeded
+from sqlalchemy.exc import OperationalError
+
 from celery_app import celery
 
 
@@ -40,9 +45,68 @@ def _raw_text(segments: list) -> str:
     return " ".join((s.get("text") or "").strip() for s in segments if s.get("text")).strip()
 
 
+def _normalize_segments(segments: list) -> list:
+    """Avoid empty transcript crashes: guarantee at least one line for DB + extraction."""
+    original = [dict(s) for s in (segments or [])]
+    if _raw_text(original).strip():
+        return original
+    if original:
+        out = []
+        for s in original:
+            d = dict(s)
+            if not (d.get("text") or "").strip():
+                d["text"] = "(No speech captured.)"
+            out.append(d)
+        return out
+    return [{"speaker": "Speaker 1", "text": "(No speech captured.)", "start": 0.0, "end": 0.0}]
+
+
+def _emit_session_terminal(conv_id: str, *, ok: bool, error: str | None = None) -> None:
+    try:
+        from extensions import socketio
+
+        payload = {
+            "conversation_id": conv_id,
+            "session_id": conv_id,
+            "status": "complete" if ok else "failed",
+        }
+        if error:
+            payload["error"] = error[:400]
+        socketio.emit("session_ready" if ok else "session_failed", payload, room=conv_id)
+    except Exception as e:
+        print(f"[task] terminal ws emit failed: {e}")
+
+
+def _mark_failed(conv_id: str, err: str | None = None) -> None:
+    from extensions import db
+    from models.conversation import Conversation
+
+    try:
+        c = Conversation.query.get(conv_id)
+        if not c:
+            return
+        c.status = "failed"
+        c.processing_started_at = None
+        db.session.commit()
+        _emit_session_terminal(conv_id, ok=False, error=err or "processing_failed")
+    except Exception as e:
+        db.session.rollback()
+        print(f"[task] mark_failed DB error {conv_id}: {e}")
+
+
+def _celery_retryable(exc: BaseException) -> bool:
+    return isinstance(exc, OperationalError)
+
+
 # ── Celery task ───────────────────────────────────────────────────────────────
 
-@celery.task(bind=True, max_retries=1, name="tasks.process_session")
+@celery.task(
+    bind=True,
+    max_retries=1,
+    name="tasks.process_session",
+    soft_time_limit=270,
+    time_limit=310,
+)
 def process_session_task(
     self,
     conv_id:  str,
@@ -51,12 +115,16 @@ def process_session_task(
     duration: int | None,
 ):
     from app import app as flask_app
+
     flask_app.app_context().push()
     from extensions import db
     from models.conversation import Conversation
-    from services.diarize_service import diarize_with_groq, split_segments_by_sentence
-    from services.extract_service import extract, generate_followups
-    from services.patient_facing_service import generate_patient_facing_summary
+    from services.diarize_service import (
+        diarize_with_groq,
+        expand_segments_for_diarization,
+        collapse_labeled_segments,
+    )
+    from services.extract_service import extract
     from routes.conversations import (
         _save_transcript,
         _save_summary,
@@ -69,31 +137,41 @@ def process_session_task(
     if not conv:
         return {"error": "Conversation not found"}
 
-    t0      = time.time()
-    specialty = conv.user.specialty if conv.user else None
+    t0 = time.time()
 
     def elapsed():
         return f"{time.time() - t0:.1f}s"
 
-    try:
-        # ── Prepare ───────────────────────────────────────────────────────
-        segments  = split_segments_by_sentence(segments)
-        text      = _raw_text(segments)
-        skip_diar = _already_diarized(segments) or len(segments) < 2
+    specialty = conv.user.specialty if conv.user else None
 
-        print(f"[task] {conv_id} | segments={len(segments)} skip_diar={skip_diar}")
+    try:
+        original = _normalize_segments(segments)
+        expanded, group_sizes = expand_segments_for_diarization(original)
+        text = _raw_text(original)
+        skip_diar = _already_diarized(original) or len(original) < 2
+
+        segments = [dict(s) for s in original]
+
+        print(
+            f"[task] {conv_id} | segments={len(original)} expanded={len(expanded)} "
+            f"skip_diar={skip_diar}"
+        )
 
         # ── Phase 1: diarize + extract in parallel ────────────────────────
         with ThreadPoolExecutor(max_workers=2, thread_name_prefix="p1") as pool:
             diar_fut = (
                 None if skip_diar
-                else pool.submit(diarize_with_groq, segments)
+                else pool.submit(diarize_with_groq, expanded)
             )
             extr_fut = pool.submit(extract, text, specialty) if text else None
 
+            labeled_expanded = None
             if diar_fut:
                 try:
-                    segments = diar_fut.result(timeout=35)
+                    labeled_expanded = diar_fut.result(timeout=120)
+                    segments = collapse_labeled_segments(
+                        original, labeled_expanded, group_sizes
+                    )
                     print(f"[task] diarize done @ {elapsed()}")
                 except Exception as e:
                     print(f"[task] diarize failed: {e}")
@@ -101,14 +179,17 @@ def process_session_task(
             extraction: dict = {}
             if extr_fut:
                 try:
-                    extraction = extr_fut.result(timeout=35)
+                    extraction = extr_fut.result(timeout=120)
                     print(f"[task] extract done @ {elapsed()}")
                 except Exception as e:
                     print(f"[task] extract failed: {e}")
 
-            # Re-extract with speaker-labeled text after diarization so the LLM
-            # can distinguish patient-said vs doctor-said (better Name, EmotionalState).
-            if diar_fut and not extraction.get("error") and not extraction.get("skipped"):
+            if (
+                diar_fut
+                and labeled_expanded is not None
+                and not extraction.get("error")
+                and not extraction.get("skipped")
+            ):
                 labeled = "\n".join(
                     f"[{s.get('speaker', 'Speaker')}] {(s.get('text') or '').strip()}"
                     for s in segments if (s.get("text") or "").strip()
@@ -124,14 +205,17 @@ def process_session_task(
                     except Exception as e:
                         print(f"[task] re-extract failed: {e}")
 
-        # ── Phase 2: persist transcript ───────────────────────────────────
+        # ── Phase 2: persist transcript (idempotent — replace existing rows) ──
+        conv = Conversation.query.get(conv_id)
+        if not conv:
+            raise RuntimeError("Conversation disappeared mid-task")
+
         if conv.transcript:
             db.session.delete(conv.transcript)
             db.session.flush()
         _save_transcript(conv_id, segments, language=language)
         print(f"[task] transcript saved @ {elapsed()}")
 
-        # ── Phase 3: followups + patient-facing in parallel ───────────────
         good_extraction = (
             extraction
             and not extraction.get("skipped")
@@ -145,54 +229,17 @@ def process_session_task(
                 db.session.delete(conv.summary)
                 db.session.flush()
 
-            # Create summary row now so field-reminders can reference it
             _save_summary(conv_id, extraction, followups=[])
             db.session.flush()
 
-            # Build plain-dict snapshot for threads (no SQLAlchemy objects)
-            summary_data = {
-                "patient_name":   extraction.get("Name"),
-                "patient_age":    extraction.get("Age"),
-                "patient_gender": extraction.get("Gender"),
-                "disease":        extraction.get("Disease"),
-                "education":      extraction.get("Education"),
-                "emotional_state":extraction.get("EmotionalState"),
-                "additional_notes":extraction.get("AdditionalNotes"),
-            }
-
-            followups     : list       = []
-            patient_facing: str | None = None
-
-            with ThreadPoolExecutor(max_workers=2, thread_name_prefix="p3") as pool:
-                fol_fut = pool.submit(generate_followups, text, extraction, specialty)
-                pf_fut  = pool.submit(
-                    generate_patient_facing_summary, text, summary_data, specialty
-                )
-
-                try:
-                    followups = fol_fut.result(timeout=35) or []
-                    print(f"[task] followups done @ {elapsed()}")
-                except Exception as e:
-                    print(f"[task] followups failed: {e}")
-
-                try:
-                    patient_facing = pf_fut.result(timeout=35)
-                    print(f"[task] patient_facing done @ {elapsed()}")
-                except Exception as e:
-                    print(f"[task] patient_facing failed: {e}")
-
-            # Apply threaded results back onto the summary row
             s = conv.summary
             if s:
-                if followups:
-                    s.follow_up_questions = followups
-                if patient_facing:
-                    s.patient_facing_summary = patient_facing
                 _generate_field_reminders(s)
 
-        # ── Phase 4: finalise ─────────────────────────────────────────────
-        conv.status   = "complete"
-        conv.title    = _smart_title(
+        # ── Phase 3: finalise ─────────────────────────────────────────────
+        conv.status = "complete"
+        conv.processing_started_at = None
+        conv.title = _smart_title(
             extraction if good_extraction else None,
             segments,
             conv.created_at,
@@ -205,26 +252,31 @@ def process_session_task(
         print(f"[task] {conv_id} complete in {elapsed()}")
 
         _send_notifications(conv)
+        _emit_session_terminal(conv_id, ok=True)
 
-        # Push a WebSocket event so the frontend can navigate immediately
-        # instead of waiting for the 2-second HTTP poll cycle.
-        try:
-            from extensions import socketio
-            socketio.emit("session_ready", {"conversation_id": conv_id}, room=conv_id)
-        except Exception as e:
-            print(f"[task] session_ready emit failed: {e}")
+        if good_extraction:
+            from tasks.enrich_summary import dispatch_enrich
 
+            dispatch_enrich(flask_app, conv_id)
+
+        gc.collect()
         return {"success": True, "conversation_id": conv_id}
+
+    except SoftTimeLimitExceeded as exc:
+        db.session.rollback()
+        _mark_failed(conv_id, "processing_timed_out")
+        print(f"[task] {conv_id} SOFT TIME LIMIT @ {elapsed()}: {exc}")
+        raise
 
     except Exception as exc:
         db.session.rollback()
-        try:
-            conv.status = "failed"
-            db.session.commit()
-        except Exception:
-            db.session.rollback()
+        if self.request.retries < self.max_retries and _celery_retryable(exc):
+            print(f"[task] {conv_id} DB retry @ {elapsed()}: {exc}")
+            raise self.retry(exc=exc, countdown=12)
+
+        _mark_failed(conv_id, str(exc))
         print(f"[task] {conv_id} FAILED @ {elapsed()}: {exc}")
-        raise self.retry(exc=exc, countdown=5) if self.request.retries < 1 else exc
+        raise
 
 
 # ── Email notifications ───────────────────────────────────────────────────────
@@ -281,18 +333,32 @@ def dispatch(
     from config import Config
 
     if Config.REDIS_URL:
-        result = process_session_task.apply_async(
-            args=[conv_id, segments, language, duration],
-            countdown=0,
-        )
-        return result.id
-    else:
-        def _run():
-            with app.app_context():
-                try:
-                    process_session_task(conv_id, segments, language, duration)
-                except Exception as e:
-                    print(f"[thread] {conv_id} failed: {e}")
+        try:
+            result = process_session_task.apply_async(
+                args=[conv_id, segments, language, duration],
+                countdown=0,
+            )
+            return result.id
+        except Exception as e:
+            print(f"[dispatch] Celery broker unreachable ({e}) — falling back to daemon thread")
 
-        threading.Thread(target=_run, daemon=True).start()
-        return None
+    def _run():
+        with app.app_context():
+            try:
+                process_session_task.apply(args=(conv_id, segments, language, duration))
+            except Exception as e:
+                print(f"[thread] {conv_id} failed: {e}")
+                try:
+                    from models.conversation import Conversation as Conv
+                    from extensions import db as _db
+
+                    c = Conv.query.get(conv_id)
+                    if c and c.status == "processing":
+                        c.status = "failed"
+                        c.processing_started_at = None
+                        _db.session.commit()
+                except Exception as db_e:
+                    print(f"[thread] could not mark failed: {db_e}")
+
+    threading.Thread(target=_run, daemon=True).start()
+    return None

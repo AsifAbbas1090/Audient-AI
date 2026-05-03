@@ -10,6 +10,7 @@ Events (server → client):
   connected      { status }              — acknowledgement on connect
   transcript_update { segments, language } — new segments from Whisper
   diarize_update { segments }            — all segments with updated speaker labels
+  session_ready / session_failed { conversation_id, session_id, status } — post-/complete pipeline done
   session_error  { error }               — non-fatal error (transcription failed for this chunk)
 """
 import os
@@ -277,33 +278,43 @@ def handle_request_diarize(data):
     try:
         # ── Path 1: pyannote audio-based ─────────────────────────────────
         if Config.HF_TOKEN and session_id and audio_service.session_exists(session_id):
-            session     = audio_service.get_session(session_id)
-            wav_path    = session.get("wav_path", "")
-            if wav_path and os.path.exists(wav_path) and os.path.getsize(wav_path) > 1000:
-                try:
-                    waveform, sr = audio_service.load_waveform_mono(wav_path)
-                    duration     = audio_service.duration_seconds(waveform, sr)
-                    if duration >= 1.0:
-                        from services.diarize_service import diarize, assign_speakers
-                        annotation = diarize(waveform, sr, min_speakers=2, max_speakers=3)
-                        if annotation:
-                            labeled, _ = assign_speakers(segments, annotation)
-                            print(f"[WS/diarize] pyannote — {len(labeled)} segments, dur={duration:.1f}s")
-                            emit("diarize_update", {"segments": labeled, "method": "pyannote"})
-                            return
-                except Exception as e:
-                    print(f"[WS/diarize] pyannote failed: {e} — falling back to Groq LLM")
+            from services.diarize_service import (
+                wait_pyannote_pipeline_ready,
+                diarize,
+                assign_speakers,
+            )
+            # Short wait: first polls during preload skip pyannote and use Groq; later polls succeed.
+            if wait_pyannote_pipeline_ready(timeout=3.0):
+                session     = audio_service.get_session(session_id)
+                wav_path    = session.get("wav_path", "")
+                if wav_path and os.path.exists(wav_path) and os.path.getsize(wav_path) > 1000:
+                    try:
+                        waveform, sr = audio_service.load_waveform_mono(wav_path)
+                        duration     = audio_service.duration_seconds(waveform, sr)
+                        if duration >= 1.0:
+                            annotation = diarize(waveform, sr, min_speakers=2, max_speakers=3)
+                            if annotation:
+                                labeled, _ = assign_speakers(segments, annotation)
+                                print(f"[WS/diarize] pyannote — {len(labeled)} segments, dur={duration:.1f}s")
+                                emit("diarize_update", {"segments": labeled, "method": "pyannote"})
+                                return
+                    except Exception as e:
+                        print(f"[WS/diarize] pyannote failed: {e} — falling back to Groq LLM")
 
         # ── Path 2: Groq LLM text-based (70B with cross-call memory) ────
         if Config.GROQ_API_KEY and len(segments) >= 2:
-            from services.diarize_service import diarize_with_groq, split_segments_by_sentence
-            # Expand multi-sentence segments — LLM assigns per sentence, not per
-            # Whisper chunk, so accuracy is much better on long segments.
-            expanded    = split_segments_by_sentence(segments)
-            prior_ctx   = _session_diarize_labels.get(session_id)
-            labeled     = diarize_with_groq(expanded, prior_labels=prior_ctx)
-            # Persist confirmed examples so the next diarize call stays consistent
-            _update_diarize_labels(session_id, labeled)
+            from services.diarize_service import (
+                diarize_with_groq,
+                expand_segments_for_diarization,
+                collapse_labeled_segments,
+            )
+            # Expand for LLM granularity, then collapse back so WebSocket payload
+            # matches client segment indices (fixes mis-aligned Doctor/Patient labels).
+            expanded, group_sizes = expand_segments_for_diarization(segments)
+            prior_ctx = _session_diarize_labels.get(session_id)
+            labeled_expanded = diarize_with_groq(expanded, prior_labels=prior_ctx)
+            _update_diarize_labels(session_id, labeled_expanded)
+            labeled = collapse_labeled_segments(segments, labeled_expanded, group_sizes)
             emit("diarize_update", {"segments": labeled, "method": "groq_llm"})
 
     except Exception as exc:

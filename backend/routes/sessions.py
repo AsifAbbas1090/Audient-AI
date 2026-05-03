@@ -80,35 +80,37 @@ def session_diarize():
     # ── Path 1: pyannote (offline audio-based) ──────────────────────────────
     if Config.HF_TOKEN:
         import os
-        session  = audio_service.get_session(session_id)
-        wav_path = session["wav_path"]
+        from services.diarize_service import wait_pyannote_pipeline_ready
 
-        if not os.path.exists(wav_path) or os.path.getsize(wav_path) < 1000:
-            # Audio too short — fall through to LLM path
-            pass
-        else:
-            try:
-                waveform, sample_rate = audio_service.load_waveform_mono(wav_path)
-                duration = audio_service.duration_seconds(waveform, sample_rate)
+        if wait_pyannote_pipeline_ready(timeout=120.0):
+            session  = audio_service.get_session(session_id)
+            wav_path = session["wav_path"]
 
-                if duration >= 0.5:
-                    annotation = diarize_service.diarize(
-                        waveform, sample_rate, min_speakers=2, max_speakers=3
-                    )
-                    if annotation is not None:
-                        result, _ = diarize_service.assign_speakers(segments, annotation)
-                        speaker_counts: dict = {}
-                        for seg in result:
-                            sp = seg.get("speaker", "Unknown")
-                            speaker_counts[sp] = speaker_counts.get(sp, 0) + 1
-                        tracks = list(annotation.itertracks(yield_label=True))
-                        print(
-                            f"[session/diarize/pyannote] duration={duration:.1f}s  "
-                            f"tracks={len(tracks)}  speakers={speaker_counts}"
+            if not os.path.exists(wav_path) or os.path.getsize(wav_path) < 1000:
+                pass
+            else:
+                try:
+                    waveform, sample_rate = audio_service.load_waveform_mono(wav_path)
+                    duration = audio_service.duration_seconds(waveform, sample_rate)
+
+                    if duration >= 0.5:
+                        annotation = diarize_service.diarize(
+                            waveform, sample_rate, min_speakers=2, max_speakers=3
                         )
-                        return jsonify({"segments": result, "method": "pyannote"})
-            except Exception as e:
-                print(f"[session/diarize/pyannote] error: {e} — falling back to Groq LLM")
+                        if annotation is not None:
+                            result, _ = diarize_service.assign_speakers(segments, annotation)
+                            speaker_counts: dict = {}
+                            for seg in result:
+                                sp = seg.get("speaker", "Unknown")
+                                speaker_counts[sp] = speaker_counts.get(sp, 0) + 1
+                            tracks = list(annotation.itertracks(yield_label=True))
+                            print(
+                                f"[session/diarize/pyannote] duration={duration:.1f}s  "
+                                f"tracks={len(tracks)}  speakers={speaker_counts}"
+                            )
+                            return jsonify({"segments": result, "method": "pyannote"})
+                except Exception as e:
+                    print(f"[session/diarize/pyannote] error: {e} — falling back to Groq LLM")
 
     # ── Path 2: Groq LLM (online text-based) ────────────────────────────────
     if Config.GROQ_API_KEY:

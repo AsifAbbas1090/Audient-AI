@@ -27,7 +27,11 @@ class Config:
     # ------------------------------------------------------------------ #
     # Audio / FFmpeg                                                       #
     # ------------------------------------------------------------------ #
+    # Path to ffmpeg executable (used by subprocess conversion).
     FFMPEG_PATH: str = os.getenv("FFMPEG_PATH", shutil.which("ffmpeg") or "ffmpeg")
+    # Windows: folder containing FFmpeg DLLs (usually the same dir as ffmpeg.exe).
+    # TorchCodec/torchaudio need this on PATH + os.add_dll_directory — see ensure_windows_media_dll_paths().
+    FFMPEG_BIN: str = os.getenv("FFMPEG_BIN", "").strip()
     TEMP_DIR: str = os.getenv("TEMP_DIR", "temp")
     SESSIONS_DIR: str = os.path.join(os.getenv("TEMP_DIR", "temp"), "sessions")
 
@@ -50,6 +54,10 @@ class Config:
     GROQ_EXTRACT_MODEL: str  = os.getenv("GROQ_EXTRACT_MODEL",  "llama-3.1-8b-instant").strip()
     # Larger model for speaker diarization — reasoning-heavy task, accuracy matters more than speed.
     GROQ_DIARIZE_MODEL: str  = os.getenv("GROQ_DIARIZE_MODEL",  "llama-3.3-70b-versatile").strip()
+    # Backoff for 429 / 5xx from Groq (multi-session bursts hit per-minute caps quickly).
+    GROQ_RETRY_MAX_ATTEMPTS: int = max(1, int(os.getenv("GROQ_RETRY_MAX_ATTEMPTS", "6")))
+    GROQ_RETRY_BASE_DELAY: float = float(os.getenv("GROQ_RETRY_BASE_DELAY", "1.25"))
+    GROQ_RETRY_MAX_DELAY: float = float(os.getenv("GROQ_RETRY_MAX_DELAY", "45"))
 
     # Speech-to-text provider: "groq" (default) or "openai" (Whisper API — e.g. for demos)
     TRANSCRIBE_PROVIDER: str = (
@@ -94,6 +102,29 @@ class Config:
     # ------------------------------------------------------------------ #
     REDIS_URL: str = os.getenv("REDIS_URL", "").strip()
 
+    # Post-save pipeline (/complete → Celery/thread): mark stuck sessions failed after N minutes.
+    # Live recording keeps status=processing but leaves processing_started_at NULL until /complete runs.
+    PROCESSING_STALE_MINUTES: int = int(os.getenv("PROCESSING_STALE_MINUTES", "20"))
+
+    # Live sessions never followed by POST /complete (closed tab, crash): stay processing forever
+    # unless we clear them. Mark failed after this many hours (minimum 24). Default 7 days.
+    RECORDING_PROCESSING_MAX_AGE_HOURS: int = max(
+        24,
+        int(os.getenv("RECORDING_PROCESSING_MAX_AGE_HOURS", "168")),
+    )
+
+    # Background reconcile interval while the API process is running (seconds, minimum 60).
+    STALE_SESSION_RECONCILE_INTERVAL_SECONDS: int = max(
+        60,
+        int(os.getenv("STALE_SESSION_RECONCILE_INTERVAL_SECONDS", "300")),
+    )
+
+    # Celery Beat (optional): reconcile stuck processing rows while workers run.
+    CELERY_BEAT_RECONCILE_SECONDS: int = max(
+        60,
+        int(os.getenv("CELERY_BEAT_RECONCILE_SECONDS", "300")),
+    )
+
     # ------------------------------------------------------------------ #
     # Email (Resend)                                                       #
     # Get a free key at https://resend.com — 3,000 emails/month free.     #
@@ -109,3 +140,50 @@ class Config:
     PORT: int = int(os.getenv("PORT", "5000"))
     DEBUG: bool = os.getenv("FLASK_DEBUG", "false").lower() == "true"
     SECRET_KEY: str = os.getenv("SECRET_KEY", "change-me-in-production")
+
+
+def ensure_windows_media_dll_paths() -> None:
+    """
+    On Windows, Python 3.8+ isolates DLL search paths. TorchCodec (used by torchaudio)
+    and FFmpeg-linked binaries then fail with 'Could not find module ... or one of its
+    dependencies'. Register FFmpeg's bin directory early and prepend PATH so subprocess
+    ffmpeg and native loaders agree.
+    """
+    import sys
+
+    if sys.platform != "win32":
+        return
+
+    dirs: list[str] = []
+    if Config.FFMPEG_BIN:
+        dirs.append(Config.FFMPEG_BIN)
+
+    exe = (Config.FFMPEG_PATH or "").strip()
+    if exe and exe.lower() != "ffmpeg":
+        d = os.path.dirname(os.path.abspath(exe))
+        if d:
+            dirs.append(d)
+
+    if not dirs:
+        w = shutil.which("ffmpeg")
+        if w:
+            dirs.append(os.path.dirname(os.path.abspath(w)))
+
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for d in dirs:
+        if not d or d in seen:
+            continue
+        seen.add(d)
+        if os.path.isdir(d):
+            ordered.append(d)
+
+    for d in ordered:
+        try:
+            os.add_dll_directory(d)  # type: ignore[attr-defined]
+        except (OSError, AttributeError):
+            pass
+
+    if ordered:
+        prefix = os.pathsep.join(ordered)
+        os.environ["PATH"] = prefix + os.pathsep + os.environ.get("PATH", "")

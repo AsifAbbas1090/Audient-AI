@@ -50,19 +50,22 @@ def _extract_groq(text: str, specialty_context: str) -> Dict[str, Any]:
     """Extract using Groq LLM API."""
     from config import Config
     from groq import Groq
+    from services.groq_retry import groq_call_with_retry
 
     client = Groq(api_key=Config.GROQ_API_KEY)
-    completion = client.chat.completions.create(
-        model=Config.GROQ_EXTRACT_MODEL,
-        messages=[
-            {"role": "system", "content": SYSTEM_MSG},
-            {
-                "role": "user",
-                "content": EXTRACT_PROMPT.format(text=text, specialty_context=specialty_context),
-            },
-        ],
-        max_tokens=512,
-        temperature=0,
+    completion = groq_call_with_retry(
+        lambda: client.chat.completions.create(
+            model=Config.GROQ_EXTRACT_MODEL,
+            messages=[
+                {"role": "system", "content": SYSTEM_MSG},
+                {
+                    "role": "user",
+                    "content": EXTRACT_PROMPT.format(text=text, specialty_context=specialty_context),
+                },
+            ],
+            max_tokens=512,
+            temperature=0,
+        )
     )
     content = (completion.choices[0].message.content or "{}").strip()
     return _parse_json(content)
@@ -126,22 +129,26 @@ def generate_followups(text: str, extracted: Dict[str, Any], specialty: str | No
     try:
         from groq import Groq
 
+        from services.groq_retry import groq_call_with_retry
+
         client = Groq(api_key=Config.GROQ_API_KEY)
         extracted_clean = {k: v for k, v in extracted.items() if v and v != "null"}
         extracted_str   = json.dumps(extracted_clean, indent=2)
 
-        resp = client.chat.completions.create(
-            model=Config.GROQ_EXTRACT_MODEL,
-            messages=[{
-                "role": "user",
-                "content": _FOLLOWUP_PROMPT.format(
-                    extracted=extracted_str,
-                    specialty_context=specialty_prompt_block(specialty),
-                    text=text[:3000],
-                ),
-            }],
-            max_tokens=400,
-            temperature=0,
+        resp = groq_call_with_retry(
+            lambda: client.chat.completions.create(
+                model=Config.GROQ_EXTRACT_MODEL,
+                messages=[{
+                    "role": "user",
+                    "content": _FOLLOWUP_PROMPT.format(
+                        extracted=extracted_str,
+                        specialty_context=specialty_prompt_block(specialty),
+                        text=text[:3000],
+                    ),
+                }],
+                max_tokens=400,
+                temperature=0,
+            )
         )
         content = (resp.choices[0].message.content or "").strip()
         match   = re.search(r'\[.*?\]', content, re.DOTALL)

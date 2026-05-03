@@ -255,12 +255,18 @@ def _transcribe_groq(
     if task == "transcribe" and lang_for_api:
         common_kwargs["language"] = lang_for_api
 
+    from services.groq_retry import groq_call_with_retry
+
     if task == "translate":
         # Never pass `language` here — clients sometimes echo old labels back into transcribe calls.
-        response = client.audio.translations.create(**_groq_translation_kwargs(common_kwargs))
+        response = groq_call_with_retry(
+            lambda: client.audio.translations.create(**_groq_translation_kwargs(common_kwargs))
+        )
         language = "English"
     else:
-        response = client.audio.transcriptions.create(**common_kwargs)
+        response = groq_call_with_retry(
+            lambda: client.audio.transcriptions.create(**common_kwargs)
+        )
         language = (
             getattr(response, "language", None)
             or normalized_language

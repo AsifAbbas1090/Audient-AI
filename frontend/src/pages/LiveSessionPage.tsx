@@ -18,10 +18,17 @@ import { speak, primeAudio } from '../lib/vocalAudio'
 import { useLiveSession, type Segment, type LiveFields, type LlmCorrection } from '../hooks/useLiveSession'
 import { useToast }      from '../components/ui/Toaster'
 import api from '../lib/api'
+import { inferDualMicDefaults, shouldAutoInferDualMic } from '../lib/audioDeviceHeuristics'
 import { writeDraft, readDraft, clearDraft, type SessionDraft } from '../lib/sessionDraft'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const POLL_MS = 2_000
+
+type SessionTerminalWs = { conversation_id?: string; session_id?: string; status?: string }
+
+function wsMatchesConv(data: SessionTerminalWs, convId: string): boolean {
+  return data.conversation_id === convId || data.session_id === convId
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function formatTime(sec: number): string {
@@ -89,7 +96,7 @@ function DeviceSelect({
         <select
           value={value}
           onChange={e => onChange(e.target.value)}
-          className="w-full appearance-none bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs text-slate-200 pr-7 focus:outline-none focus:border-brand-500/50 light:bg-white light:border-slate-200 light:text-slate-900"
+          className="device-select-native w-full appearance-none bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs text-slate-100 pr-7 focus:outline-none focus:border-brand-500/50 light:bg-white light:border-slate-200 light:text-slate-900"
         >
           <option value="">{placeholder}</option>
           {devices.map(d => (
@@ -201,6 +208,8 @@ export default function LiveSessionPage() {
   // ── Scenario detection state ────────────────────────────────────────────────
   const [telehealthMode,       setTelehealthMode]       = useState(false)
   const [dualMicDismissed,     setDualMicDismissed]     = useState(false)
+  /** Set when we auto-filled Doctor + Patient from device labels (show one-line hint). */
+  const [dualMicSuggested,     setDualMicSuggested]     = useState(false)
   const [thirdSpeakerDetected, setThirdSpeakerDetected] = useState(false)
   const [thirdSpeakerLabel,    setThirdSpeakerLabel]    = useState('Other')
   const [showThirdColumn,      setShowThirdColumn]       = useState(false)
@@ -334,6 +343,20 @@ export default function LiveSessionPage() {
     getBlob,
   } = session
 
+  /** When idle + two mics + both selects empty → headset→Doctor, built-in→Patient */
+  useEffect(() => {
+    if (active || saving) return
+    if (doctorDeviceId || patientDeviceId) return
+    if (audioDevices.length < 2) return
+    if (!shouldAutoInferDualMic(audioDevices)) return
+    const picked = inferDualMicDefaults(audioDevices)
+    if (!picked) return
+    setDoctorDeviceId(picked.doctorId)
+    setPatientDeviceId(picked.patientId)
+    setDualMicDismissed(true)
+    setDualMicSuggested(true)
+  }, [audioDevices, active, saving, doctorDeviceId, patientDeviceId])
+
   // Write to localStorage whenever segments accumulate during a live recording
   useEffect(() => {
     if (!sessionId || segments.length === 0) return
@@ -429,6 +452,7 @@ export default function LiveSessionPage() {
       done = true
       clearInterval(pollRef.current!)
       session.socket.current?.off('session_ready')
+      session.socket.current?.off('session_failed')
       if (failed) {
         setSaving(false)
         isSavingRef.current = false
@@ -443,12 +467,29 @@ export default function LiveSessionPage() {
       }
     }
 
+    // Immediate HTTP check — avoids waiting a full poll interval after WS missed an event
+    try {
+      const r0 = await api.get(`/api/conversations/${convId}/status`)
+      const s0 = r0.data?.status as string | undefined
+      if (s0 === 'complete' || s0 === 'approved') {
+        finish()
+        return
+      }
+      if (s0 === 'failed') {
+        finish(true)
+        return
+      }
+    } catch { /* keep polling */ }
+
     // Primary: WebSocket push — arrives the moment the task completes
-    session.socket.current?.on('session_ready', (data: { conversation_id: string }) => {
-      if (data.conversation_id === convId) finish()
+    session.socket.current?.on('session_ready', (data: SessionTerminalWs) => {
+      if (wsMatchesConv(data, convId)) finish()
+    })
+    session.socket.current?.on('session_failed', (data: SessionTerminalWs) => {
+      if (wsMatchesConv(data, convId)) finish(true)
     })
 
-    // Fallback: HTTP poll — handles cases where WS is disconnected
+    // Fallback: HTTP poll — handles cases where WS is disconnected or events lack routing
     pollRef.current = setInterval(async () => {
       try {
         const r      = await api.get(`/api/conversations/${convId}/status`)
@@ -528,16 +569,27 @@ export default function LiveSessionPage() {
 
   // ── Scenario handlers ─────────────────────────────────────────────────────
   const handleAutoDualMic = useCallback(() => {
-    const second = audioDevices.find(d => d.deviceId !== 'default' && d.deviceId !== doctorDeviceId)
-    if (second) setPatientDeviceId(second.deviceId)
+    const picked = inferDualMicDefaults(audioDevices)
+    if (picked) {
+      setDoctorDeviceId(picked.doctorId)
+      setPatientDeviceId(picked.patientId)
+      setDualMicSuggested(true)
+    }
     setDualMicDismissed(true)
-  }, [audioDevices, doctorDeviceId])
+  }, [audioDevices])
 
   const handleTelehealthToggle = useCallback((enabled: boolean) => {
     setTelehealthMode(enabled)
     if (enabled) {
-      const second = audioDevices.find(d => d.deviceId !== 'default' && d.deviceId !== doctorDeviceId)
-      if (second) setPatientDeviceId(second.deviceId)
+      const picked = inferDualMicDefaults(audioDevices)
+      if (picked) {
+        setDoctorDeviceId(picked.doctorId)
+        setPatientDeviceId(picked.patientId)
+        setDualMicSuggested(true)
+      } else {
+        const second = audioDevices.find(d => d.deviceId !== 'default' && d.deviceId !== doctorDeviceId)
+        if (second) setPatientDeviceId(second.deviceId)
+      }
     } else {
       setPatientDeviceId('')
     }
@@ -1008,7 +1060,7 @@ export default function LiveSessionPage() {
                         label="Doctor mic"
                         devices={audioDevices}
                         value={doctorDeviceId}
-                        onChange={setDoctorDeviceId}
+                        onChange={id => { setDualMicSuggested(false); setDoctorDeviceId(id) }}
                         placeholder="Default microphone"
                       />
                       <DeviceSelect
@@ -1016,10 +1068,15 @@ export default function LiveSessionPage() {
                         label={telehealthMode ? 'Patient mic (telehealth)' : 'Patient mic (optional)'}
                         devices={audioDevices}
                         value={patientDeviceId}
-                        onChange={setPatientDeviceId}
+                        onChange={id => { setDualMicSuggested(false); setPatientDeviceId(id) }}
                         placeholder="None (single mic)"
                       />
                     </div>
+                    {dualMicSuggested && patientDeviceId && (
+                      <p className="text-[10px] text-slate-500 light:text-slate-600 px-0.5">
+                        Suggested pairing: headset/USB → Doctor, built-in/room → Patient. Adjust if yours differs.
+                      </p>
+                    )}
                     {/* Telehealth mode toggle */}
                     <label className="flex items-center gap-2.5 cursor-pointer w-fit">
                       <div

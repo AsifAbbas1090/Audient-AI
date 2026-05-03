@@ -96,6 +96,7 @@ def generate_recommendations(
     from config import Config
     from groq import Groq
     from services.specialty_service import specialty_prompt_block
+    from services.groq_retry import groq_call_with_retry
 
     if not Config.GROQ_API_KEY:
         raise RuntimeError("GROQ_API_KEY is not set — cannot generate recommendations.")
@@ -112,14 +113,16 @@ def generate_recommendations(
     )
 
     client = Groq(api_key=Config.GROQ_API_KEY)
-    completion = client.chat.completions.create(
-        model=Config.GROQ_EXTRACT_MODEL,   # llama-3.1-8b-instant
-        messages=[
-            {"role": "system", "content": SYSTEM_MSG},
-            {"role": "user",   "content": prompt},
-        ],
-        max_tokens=1024,
-        temperature=0.3,
+    completion = groq_call_with_retry(
+        lambda: client.chat.completions.create(
+            model=Config.GROQ_EXTRACT_MODEL,   # llama-3.1-8b-instant
+            messages=[
+                {"role": "system", "content": SYSTEM_MSG},
+                {"role": "user",   "content": prompt},
+            ],
+            max_tokens=1024,
+            temperature=0.3,
+        )
     )
 
     content = (completion.choices[0].message.content or "").strip()

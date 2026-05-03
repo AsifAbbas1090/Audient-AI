@@ -11,7 +11,14 @@ When REDIS_URL is not set:
     a daemon thread (see tasks/process_session.py dispatch helper).
   - This lets you develop without Redis installed.
 """
-from config import Config
+from dotenv import load_dotenv
+
+load_dotenv()
+
+from config import Config, ensure_windows_media_dll_paths
+
+ensure_windows_media_dll_paths()
+
 from celery import Celery
 
 _broker  = Config.REDIS_URL or "memory://"
@@ -21,7 +28,7 @@ celery = Celery(
     "audient",
     broker=_broker,
     backend=_backend,
-    include=["tasks.process_session"],
+    include=["tasks.process_session", "tasks.enrich_summary", "tasks.recovery"],
 )
 
 celery.conf.update(
@@ -39,3 +46,11 @@ celery.conf.update(
     # Retry on connection errors
     broker_connection_retry_on_startup = True,
 )
+
+if Config.REDIS_URL:
+    celery.conf.beat_schedule = {
+        "reconcile-stale-processing": {
+            "task": "tasks.recovery.reconcile_stale_processing_task",
+            "schedule": float(Config.CELERY_BEAT_RECONCILE_SECONDS),
+        },
+    }
