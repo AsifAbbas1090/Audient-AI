@@ -169,6 +169,7 @@ export default function LiveSessionPage() {
   const [elapsed,      setElapsed]      = useState(0)
   const [processing,   setProcessing]   = useState(false)
   const [saving,       setSaving]       = useState(false)
+  const [finalizing,   setFinalizing]   = useState(false)  // waiting for last Groq chunk after stop
   const [progressStep, setProgressStep] = useState(0)
   const [savedId,      setSavedId]      = useState<string | null>(null)
   const [statusMsg,    setStatusMsg]    = useState<string | null>(null)
@@ -215,7 +216,8 @@ export default function LiveSessionPage() {
   const prevClinLen     = useRef(0)
   const prevPatLen      = useRef(0)
   const prevThirdLen    = useRef(0)
-  const isSavingRef     = useRef(false)
+  const isSavingRef        = useRef(false)
+  const finalizeTimerRef   = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Ref so callbacks can read fresh values without stale closures
   const patientDeviceIdRef = useRef(patientDeviceId)
   const noisyCountRef      = useRef(0)
@@ -353,9 +355,32 @@ export default function LiveSessionPage() {
   }, [segments.length])  // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (!active && !recording && segments.length > 0 && sessionId && !isSavingRef.current) {
+    if (active || recording || !sessionId || isSavingRef.current) return
+
+    if (segments.length > 0) {
+      // Normal path — transcript already available, save immediately
+      if (finalizeTimerRef.current) { clearTimeout(finalizeTimerRef.current); finalizeTimerRef.current = null }
+      setFinalizing(false)
       isSavingRef.current = true
       saveSession(sessionId)
+      return
+    }
+
+    // No segments yet — session stopped before first Groq response came back.
+    // Show "Finalizing…" UI and wait up to 15 s for the in-flight chunk to land.
+    // If nothing arrives, save anyway so the session doesn't stay stuck in "Processing" in the DB.
+    setFinalizing(true)
+    if (!finalizeTimerRef.current) {
+      const sid = sessionId  // capture for timeout closure
+      finalizeTimerRef.current = setTimeout(() => {
+        finalizeTimerRef.current = null
+        setFinalizing(false)
+        if (!isSavingRef.current) {
+          isSavingRef.current = true
+          saveSession(sid)
+          toast('Short session saved — transcript may be limited', 'info')
+        }
+      }, 15_000)
     }
   }, [active, recording, segments])  // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -448,6 +473,8 @@ export default function LiveSessionPage() {
     setDraftToRestore(null)
     setRestoredSessionId(null)
     isSavingRef.current = false
+    if (finalizeTimerRef.current) { clearTimeout(finalizeTimerRef.current); finalizeTimerRef.current = null }
+    setFinalizing(false)
     setSavedId(null)
     setSegments([])
     setElapsed(0)
@@ -625,6 +652,17 @@ export default function LiveSessionPage() {
     <div className="app-page">
       <Sidebar />
       {saving && <ProcessingOverlay step={progressStep} />}
+
+      {/* Finalizing overlay — shown for short sessions while waiting for last Groq chunk */}
+      {finalizing && !saving && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-3 px-8 py-6 bg-surface-200 border border-white/10 rounded-2xl shadow-2xl">
+            <Loader2 size={28} className="text-brand-400 animate-spin" />
+            <p className="text-sm font-medium text-white">Finalizing recording…</p>
+            <p className="text-xs text-slate-500">Waiting for last transcription chunk</p>
+          </div>
+        </div>
+      )}
 
       {/* Always-on vocal prompts indicator (bottom-right dot) */}
       <VocalPromptsIndicator
