@@ -153,21 +153,33 @@ def load_waveform_mono(wav_path: str):
 
     Requires: pip install torch torchaudio
     Raises ImportError if torchaudio is not installed.
+
+    On Windows, torchaudio may delegate decoding to TorchCodec; if those DLLs fail to load,
+    falls back to soundfile + torch (same tensor layout pyannote expects).
     """
     try:
-        import torchaudio
         import torch
+        import torchaudio
     except ImportError:
         raise ImportError(
             "torchaudio is required for pyannote diarization.\n"
             "Install: pip install torch torchaudio"
         )
 
-    waveform, sample_rate = torchaudio.load(wav_path)
+    waveform = None
+    sample_rate = _TARGET_SR
+
+    try:
+        waveform, sample_rate = torchaudio.load(wav_path)
+    except Exception as e:
+        print(f"[audio] torchaudio.load failed ({e}); using soundfile → torch fallback")
+        data, sample_rate = sf.read(wav_path, dtype="float32", always_2d=False)
+        if getattr(data, "ndim", 0) > 1:
+            data = np.mean(data, axis=1)
+        waveform = torch.from_numpy(np.ascontiguousarray(data)).unsqueeze(0)
 
     # Mix down to mono if multi-channel
     if waveform.shape[0] > 1:
-        import torch
         waveform = torch.mean(waveform, dim=0, keepdim=True)
 
     # Resample to 16kHz if needed
@@ -175,8 +187,8 @@ def load_waveform_mono(wav_path: str):
         resampler = torchaudio.transforms.Resample(
             orig_freq=sample_rate, new_freq=_TARGET_SR
         )
-        waveform     = resampler(waveform)
-        sample_rate  = _TARGET_SR
+        waveform = resampler(waveform)
+        sample_rate = _TARGET_SR
 
     return waveform, sample_rate
 

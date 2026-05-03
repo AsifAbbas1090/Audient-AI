@@ -19,8 +19,11 @@ if _ssl_cert and not os.path.isfile(_ssl_cert):
         del os.environ["SSL_CERT_FILE"]
 
 # Set HF_HOME before any Hugging Face / torch imports
-from config import Config
+from config import Config, ensure_windows_media_dll_paths
+
 os.environ["HF_HOME"] = Config.HF_HOME
+# TorchCodec/torchaudio need FFmpeg DLL dirs visible before first native import (Windows).
+ensure_windows_media_dll_paths()
 
 import shutil
 from flask import Flask, request
@@ -118,12 +121,47 @@ def create_app() -> Flask:
     # ── Routes + Socket handlers ────────────────────────────────────────────
     register_blueprints(app)
 
+    with app.app_context():
+        if Config.DATABASE_URL:
+            try:
+                from routes.conversations import reconcile_stale_processing_sessions
+
+                n = reconcile_stale_processing_sessions()
+                if n:
+                    print(f"[Boot] Stale sessions : reconciled {n} row(s) → status=failed")
+            except Exception as e:
+                print(f"[Boot] Stale session reconcile at startup skipped: {e}")
+
     # ── Pre-load pyannote pipeline in background (if HF_TOKEN is set) ─────────
     # Avoids a 30-90s blocking download on the first live diarization request.
     if Config.HF_TOKEN:
         import threading
         from services import diarize_service
         threading.Thread(target=diarize_service.get_pipeline, daemon=True, name="pyannote-preload").start()
+
+    # ── Periodic stale-session reconcile (abandoned live + stuck /complete pipeline) ──
+    if Config.DATABASE_URL:
+
+        def _stale_reconcile_loop():
+            import time
+            from routes.conversations import reconcile_stale_processing_sessions
+
+            interval = Config.STALE_SESSION_RECONCILE_INTERVAL_SECONDS
+            while True:
+                time.sleep(interval)
+                try:
+                    with app.app_context():
+                        reconcile_stale_processing_sessions()
+                except Exception as e:
+                    print(f"[stale-processing] periodic reconcile error: {e}")
+
+        import threading
+
+        threading.Thread(
+            target=_stale_reconcile_loop,
+            daemon=True,
+            name="stale-session-reconcile",
+        ).start()
 
     # ── Startup diagnostics ─────────────────────────────────────────────────
     groq_ready  = bool(Config.GROQ_API_KEY)

@@ -40,6 +40,10 @@ class Conversation(db.Model):
     approved_at = db.Column(db.DateTime(timezone=True), nullable=True)
     deleted_at  = db.Column(db.DateTime(timezone=True), nullable=True)  # soft delete
 
+    # Set only when POST /complete dispatches background AI pipeline — never during live /session/start.
+    # Used to detect Celery/worker outages (Redis queue never drained) without touching active recordings.
+    processing_started_at = db.Column(db.DateTime(timezone=True), nullable=True)
+
     # Optional link to a parent session (continuation sessions)
     parent_id = db.Column(
         db.String(36),

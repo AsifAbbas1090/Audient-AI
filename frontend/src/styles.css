@@ -71,6 +71,31 @@
   html.light ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
 }
 
+/*
+ * Native <select> dropdown lists are rendered by the OS/browser and often ignore
+ * Tailwind text colors — dark theme apps get a white popup with washed-out option text.
+ * Force high-contrast option rows (readable on typical light list surfaces).
+ */
+@layer base {
+  select.device-select-native {
+    color-scheme: dark;
+  }
+
+  html.light select.device-select-native {
+    color-scheme: light;
+  }
+
+  select.device-select-native option {
+    background-color: #ffffff;
+    color: #0f172a;
+  }
+
+  select.device-select-native option:checked {
+    background-color: #e2e8f0;
+    color: #020617;
+  }
+}
+
 /* ── Utility classes ────────────────────────────────────────── */
 @layer utilities {
   /* Dot grid background */

@@ -15,12 +15,19 @@ health_bp = Blueprint("health", __name__)
 @health_bp.route("/health", methods=["GET"])
 @health_bp.route("/api/config", methods=["GET"])
 def health():
+    redis_on = bool(Config.REDIS_URL)
     return jsonify({
         "status": "ok",
         "mode": "offline",
         "whisper_model": Config.WHISPER_MODEL,
         "extraction_available": True,
         "diarization_available": bool(Config.HF_TOKEN),
+        "redis_queue_enabled": redis_on,
+        "processing_worker_hint": (
+            "REDIS_URL is set — run a Celery worker (celery -A celery_app.celery worker --loglevel=info) "
+            "or sessions stay Processing until stale timeout."
+            if redis_on else None
+        ),
     })
 
 

@@ -135,6 +135,11 @@ MIGRATIONS = [
     ALTER TABLE conversations
       ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
     """,
+    # ── conversations (post-complete pipeline watchdog) ────────────────────
+    """
+    ALTER TABLE conversations
+      ADD COLUMN IF NOT EXISTS processing_started_at TIMESTAMPTZ;
+    """,
     # ── conversations (patient FK) — patients table must exist first ───────
     # db.create_all() creates patients before adding the FK column.
     # This ALTER is a defensive guard for re-runs after initial creation.
