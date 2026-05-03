@@ -88,16 +88,16 @@ This is the primary mode. Audio is streamed to the server in small windows while
 1. User clicks "Start" → `POST /api/session/start` → server creates a session and returns a `session_id`.
 2. `MediaRecorder.start(timeslice=500ms)` is called on the selected microphone(s).
 3. Every 500ms the browser emits an `ondataavailable` event. The hook accumulates these blobs.
-4. Every **4 seconds** (CHUNK_MS=4000) a window blob (8 sub-chunks = 4s of audio) is assembled and emitted as a WebSocket event: `audio_chunk` with `{ session_id, audio (base64), is_final: false }`.
+4. Every **4 seconds** (`CHUNK_MS`) a window blob (**10** × 500ms ≈ **5s** of audio per Whisper call) is assembled and emitted as Socket.IO `audio_chunk` with `{ session_id, audio: ArrayBuffer, is_final, … }`.
 5. If dual-channel is enabled, the patient mic runs a parallel `MediaRecorder` and emits its own chunks tagged with a forced speaker label.
 6. Every **60 seconds**, the accumulated transcript text is POSTed to `POST /api/extract` to show a live preview of extracted fields on screen.
 7. Every **15 seconds**, a `request_diarize` WebSocket event is emitted to re-label speakers on the current segments.
 
 #### Backend Side (`socket_handlers.py` — `handle_audio_chunk`)
-1. Server receives `audio_chunk`. Base64 audio is decoded and saved to a temp WAV.
+1. Server receives `audio_chunk` (binary ArrayBuffer). Writes `temp/ws_<uuid>.webm`.
 2. Silence detection: if the file is < 500 bytes, skip (no speech).
-3. **Groq Whisper** transcribes the WAV file: `transcribe(audio_path, context=last_300_chars)`.
-   - `context` carries the last 300 characters from the previous chunk so Whisper has continuity across chunks.
+3. **Groq Whisper** transcribes the temp WebM via `whisper_service.transcribe(..., context=prior_transcript_tail)`.
+   - Rolling tail is capped by `WHISPER_ROLLING_CONTEXT_MAX` (800 chars) plus the fixed medical prompt prefix sent to Groq.
 4. Segments are returned with start/end timestamps.
 5. If `HF_TOKEN` is set, the chunk WAV is appended to a session-level accumulated WAV file (used later by Pyannote for full-session diarization).
 6. If the chunk came from the patient mic (forced speaker), segments are labeled "Patient" directly without diarization.
@@ -105,34 +105,29 @@ This is the primary mode. Audio is streamed to the server in small windows while
 
 #### Diarization during live session (`handle_request_diarize`)
 - **Path 1 (Pyannote)**: Runs on the accumulated session WAV if `HF_TOKEN` is present. Gives audio-based speaker times → mapped to segments.
-- **Path 2 (Groq LLM)**: Sends all transcript text to `llama-3.1-8b-instant` with a prompt asking it to infer Doctor vs Patient. Used when Pyannote is not available.
+- **Path 2 (Groq LLM)**: Text-based Doctor/Patient labels via `GROQ_DIARIZE_MODEL` (default larger model than extract). Used when Pyannote is not available or fails.
 - Server emits `diarize_update` with relabeled segments.
 
 #### Session Finalization
 1. User clicks "Finish".
 2. Frontend posts `POST /api/conversations/:id/complete` with `{ segments, language, duration }`.
-3. Backend sets `Conversation.status = "processing"` and dispatches a **Celery background task**: `process_session_task(conversation_id)`.
+3. Backend sets `Conversation.status = "processing"`, stamps `processing_started_at`, and dispatches **`process_session_task`** (**Celery** if `REDIS_URL`, else **daemon thread** + eager Celery).
 4. Frontend polls `GET /api/conversations/:id/status` every few seconds until status flips to `complete`.
 
-#### Background Task (`process_session_task` via Celery)
+#### Background Task (`process_session_task` via Celery or daemon thread)
 ```
 Phase 1 — Parallel (ThreadPoolExecutor, 2 workers):
-  ├─ Full diarization (Pyannote on accumulated WAV or Groq LLM on full transcript)
-  └─ Medical extraction + follow-up question generation
+  ├─ Groq LLM diarize on transcript (Config.GROQ_DIARIZE_MODEL, default 70B-class)
+  └─ Medical extraction (Config.GROQ_EXTRACT_MODEL) + optional re-extract after labels
 
 Phase 2 — Serial:
-  ├─ Save TranscriptLines to database
-  └─ Save Summary + extracted entities to database
+  ├─ Save transcript + summary + FieldReminders (when extraction succeeds)
 
-Phase 3 — Parallel:
-  ├─ Generate patient-facing plain-language summary
-  └─ Generate 3-5 follow-up questions for next visit
+Phase 3 — Serial:
+  ├─ Mark Conversation.status = "complete", emit session_ready, email (Resend)
 
-Phase 4 — Serial:
-  ├─ Generate FieldReminders (flag missing fields by severity)
-  ├─ Mark Conversation.status = "complete"
-  ├─ Create in-app Notification
-  └─ Send email notification (if RESEND_API_KEY is configured)
+Deferred (`tasks/enrich_summary` after complete):
+  └─ Follow-up questions + patient-facing summary (parallel Groq calls, ~60s timeouts each)
 ```
 
 ---
@@ -155,7 +150,7 @@ Simpler path for when the doctor records everything first and processes afterwar
 Key behaviors of the Whisper integration:
 
 - **Medical prompt biasing**: The Whisper `prompt` parameter is pre-filled with clinical terminology (drug names, conditions, anatomical terms) to steer recognition toward medical vocabulary.
-- **Cross-chunk context**: The last 300 characters of the previous chunk's transcript are passed as context so Whisper doesn't start blind on each new chunk.
+- **Cross-chunk context**: A rolling tail of prior transcript text (bounded by `WHISPER_ROLLING_CONTEXT_MAX`, combined with the medical prompt) is passed so Whisper stays coherent across windows.
 - **Language auto-detection**: If no language hint is given, Whisper detects it automatically and returns the detected language alongside segments.
 - **Translation**: If `translate=True`, Whisper translates the audio to English during transcription (one step, not two).
 
@@ -165,7 +160,7 @@ Key behaviors of the Whisper integration:
 
 - **Primary**: Groq `llama-3.1-8b-instant`. Prompt is specialty-aware (different prompts for cardiology vs psychiatry vs general MBBS etc.).
 - **Fallback**: Ollama with `phi3:mini` if Groq is unavailable or the environment is fully offline.
-- **Extracted fields**: `patient_name`, `patient_age`, `patient_gender`, `disease`, `education`, `emotional_state`, `additional_notes`, `follow_up_questions`.
+- **Extracted fields**: `patient_name`, `patient_age`, `patient_gender`, `disease`, `education`, `emotional_state`, `additional_notes`. Follow-up questions are generated later in **`tasks/enrich_summary`** (not always in the inline extract JSON).
 - **Live preview**: During a live session the frontend calls `POST /api/extract` every 60 seconds so the doctor can see fields filling in while still recording.
 
 ---
@@ -341,7 +336,8 @@ Every phrase heard is logged: `POST /api/conversations/:id/vocal-commands` with 
 ### Health
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/health` | Service status + config summary |
+| GET | `/health` or `/api/config` | Liveness + hints (`redis_queue_enabled`, `diarization_available`, …) |
+| GET | `/api/db-test` | PostgreSQL connectivity |
 
 ---
 

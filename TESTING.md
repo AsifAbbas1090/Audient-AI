@@ -80,8 +80,8 @@ This guide covers every feature of the system. Follow each section in order on a
 ### 2.3 Speaker labels appear
 
 1. Continue recording and speak for at least 20–30 seconds (simulate a short conversation — ask a question, pause, answer it in a different tone)
-2. Wait up to 12 seconds after last chunk
-3. **Expected:** Some segments are labelled `[DR]` or `[PT]` (may take the full 12-second diarization poll cycle)
+2. Wait up to **15 seconds** after speech (live hook runs `request_diarize` on that interval)
+3. **Expected:** Some segments are labelled `[DR]` or `[PT]` (timing depends on diarize interval + Groq/pyannote latency)
 
 ### 2.4 Stop recording and complete session
 
@@ -489,7 +489,7 @@ This guide covers every feature of the system. Follow each section in order on a
 
 1. Set `GROQ_API_KEY=invalid_key` in `.env` and restart backend
 2. Start a live session and speak
-3. **Expected:** Error response from `/api/transcribe` returned gracefully — transcript shows error text, page does not crash
+3. **Expected:** Live path surfaces error via WebSocket (`session_error` or missing updates); ASR upload would fail `POST /api/transcribe` — page should not white-screen
 
 ### 15.3 Empty audio chunk skipped
 
@@ -560,7 +560,7 @@ curl http://localhost:5000/api/admin/stats \
 
 ```bash
 curl http://localhost:5000/health
-# → 200 { "status": "ok", "mode": "online", "groq": true }
+# → 200 { "status": "ok", "redis_queue_enabled": ..., "diarization_available": ..., ... }
 ```
 
 ---

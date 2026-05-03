@@ -39,10 +39,11 @@ The doctor starts a session, speaks naturally with their patient, and the platfo
 | Layer | Technology |
 |---|---|
 | Frontend | React 18, TypeScript, Vite, Tailwind CSS, Framer Motion |
-| Backend | Flask 3, SQLAlchemy 2, PyJWT, bcrypt |
+| Backend | Flask 3, Flask-SocketIO, SQLAlchemy 2, Celery (optional Redis), PyJWT, bcrypt |
 | Database | Supabase PostgreSQL |
 | Transcription | Groq Whisper API (`whisper-large-v3`) |
-| AI Extraction & Diarization | Groq LLM (`llama-3.1-8b-instant`) |
+| AI Extraction | Groq LLM (`llama-3.1-8b-instant`, configurable) |
+| Text diarization (Doctor/Patient) | Groq LLM (`GROQ_DIARIZE_MODEL`, default `llama-3.3-70b-versatile`) |
 | Speaker Diarization (offline) | pyannote.audio 3.1 (optional — requires `HF_TOKEN`) |
 | Offline Extraction Fallback | Ollama (`phi3:mini`) |
 | Voice Commands | Web Speech API (Chrome / Edge only) |
@@ -54,41 +55,42 @@ The doctor starts a session, speaks naturally with their patient, and the platfo
 ```
 Browser (React SPA)
   │
-  ├── MediaRecorder → 5s WebM chunks → POST /api/transcribe ─► Groq whisper-large-v3
-  │                                                                    │
-  ├── poll /api/session/diarize every 12s ◄── segments + labels ──────┘
+  ├── Live: MediaRecorder → every **4s** send a window (~**5s** audio = 10×500ms slices) ──Socket.IO `audio_chunk`──► Groq whisper-large-v3
+  │         └── `transcript_update` (+ rolling transcript context capped ~800 chars per `session_id`)
+  ├── Live: request_diarize ~15s + POST /api/extract ~60s (preview fields)
   │
-  ├── POST /api/conversations/:id/complete
-  │       └── saves transcript → Groq extraction → field reminders
+  ├── ASR page: full file → POST /api/transcribe ─► Groq Whisper
   │
-  └── REST: sessions · patients · admin
-              └── Flask → SQLAlchemy → Supabase PostgreSQL
+  ├── POST /api/conversations/:id/complete → 202 + background task
+  │       └── diarize + extract → save transcript/summary → status complete (+ enrich async)
+  │
+  └── REST + Socket.IO → Flask → SQLAlchemy → Supabase PostgreSQL
 ```
 
-**Audio lifecycle:**
+**Live audio lifecycle (primary path):**
 ```
-Browser mic → MediaRecorder chunk (WebM)
-  → POST multipart to /api/transcribe
-      → saved as temp/<uuid>.webm
-      → sent to Groq Whisper API
-      → response returned
-      → temp file deleted immediately   ← audio never persisted long-term
+Browser mic → windowed WebM blob → Socket.IO emit(audio_chunk)
+  → temp/ws_<uuid>.webm → Groq Whisper API → transcript_update to client → temp deleted
+Optional HF_TOKEN: chunks folded into temp/sessions/<session_id>.wav for pyannote
 ```
+
+**ASR upload path:** multipart `POST /api/transcribe` (same Whisper service), then save via `POST /api/conversations`.
 
 ---
 
 ## 4. Features
 
 ### Authentication & Roles
-- JWT-based auth (7-day tokens stored in `localStorage`)
+- **Short-lived access JWT** (Bearer, stored in `localStorage`) + **httpOnly refresh cookie** (`POST /api/auth/refresh` rolls it). Configurable expiry via `JWT_ACCESS_EXPIRY_MINUTES` / `JWT_REFRESH_EXPIRY_DAYS` in `.env`.
 - Two roles: `healthcare` and `admin` with route guards on both frontend and backend
-- Register, login, logout, offline password reset (no email token — suitable for clinic-local deployments)
+- Register, login, logout, offline password reset (no email verification — suitable for clinic-local deployments)
 - Sessions recorded anonymously before login are auto-claimed when the user signs in
 
 ### Live Recording Session
-- Browser `MediaRecorder` records in 5-second WebM chunks posted to `/api/transcribe`
-- Transcript grows in real time as each chunk returns text
-- Speaker diarization polls `/api/session/diarize` every 12 seconds and re-labels Doctor / Patient segments
+- Browser `MediaRecorder` streams ~4s WebM windows over **Socket.IO** (`audio_chunk`); server calls Groq Whisper per window
+- Transcript grows in real time via `transcript_update` events
+- Speaker diarization: WebSocket `request_diarize` ~every 15s (and `/api/session/diarize` exists for HTTP polling); optional **dual mic** (`patientDeviceId`) tags patient chunks with `forced_speaker`
+- Incremental extraction: frontend `POST /api/extract` ~every **60s** during live session for on-screen field preview
 - Waveform animation, recording duration timer, visual session state indicator
 
 ### Vocal Commands (Chrome / Edge)
@@ -172,8 +174,8 @@ Results are shown in a Clinical Insights card and are never auto-saved.
 | Stage | Location | Persisted? |
 |---|---|---|
 | Browser recording | Browser memory (MediaRecorder blob) | No |
-| Each chunk upload | `backend/temp/<uuid>.webm` | Temp — deleted immediately after Groq returns |
-| Session WAV accumulation | `backend/temp/sessions/<id>.wav` | No-op in online mode — file created but empty |
+| Each live chunk | `backend/temp/ws_<uuid>.webm` | Temp — deleted after Groq returns |
+| Session WAV accumulation | `backend/temp/sessions/<id>.wav` | Written when `HF_TOKEN` set (pyannote path); optional otherwise |
 | Long-term audio storage | `audio_files` DB table (`file_url` column) | **Not implemented** — model scaffolded, upload pipeline not built |
 
 **In plain terms: audio is never stored permanently in the current build.** It is transcribed on-the-fly and discarded. The `AudioFile` model and `file_url` column are ready for a future Supabase Storage / S3 integration.
@@ -212,17 +214,17 @@ All data lives in **Supabase PostgreSQL** with SSL. Nothing is stored locally on
 | Session Approval / Lock | `approved` status, `approved_at` timestamp, edit lock for non-admins |
 | Audit Log | Key actions logged; visible in Admin panel |
 | Role-Based Access Control | `healthcare` / `admin`, route guards frontend + backend |
-| JWT Authentication | Register, login, logout, password reset, 7-day expiry |
+| JWT Authentication | Access + refresh (httpOnly cookie), `/api/auth/refresh`, logout revokes refresh |
 | Session Ownership Linking | Orphaned sessions auto-claimed on login |
 
 ### Not Yet Implemented
 
 | PRD Feature | Gap | Notes |
 |---|---|---|
-| Real-time field extraction during live session | Extraction runs post-session, not mid-conversation | Needs streaming + incremental NLP |
-| Dedicated dual-channel microphone | Only single shared mic supported | Requires `getUserMedia` with `deviceId` + two MediaRecorder streams |
+| Streaming NLP / token streaming | Extract uses discrete REST calls | Live preview via periodic `/api/extract` already works |
+| Polyphonic speaker separation from single mic | Best-effort LLM/pyannote labels | Dual-mic path labels channels explicitly |
 | Audio persistence (Supabase Storage / S3) | Audio deleted after transcription | `AudioFile` model ready; upload pipeline not built |
-| Email-based password reset | Offline reset only (no verification email sent) | Needs an email provider (Resend, SendGrid) |
+| Email-based password reset | Offline reset only (no verification email sent) | Optional: Resend (`RESEND_API_KEY`) used for session-complete emails, not reset |
 | HIPAA / PDPA compliance controls | No data residency, audit controls minimal | Supabase handles encryption at rest; app-layer controls not implemented |
 
 ---
@@ -274,7 +276,7 @@ npm run dev           # starts on http://localhost:5173
 
 ```bash
 curl http://localhost:5000/health
-# → { "status": "ok", "mode": "online", "groq": true }
+# → JSON includes "status":"ok", "redis_queue_enabled", "diarization_available", etc.
 ```
 
 ---
@@ -290,9 +292,15 @@ DATABASE_URL=postgresql://postgres:<password>@db.<project-ref>.supabase.co:5432/
 # Groq API key — free at https://console.groq.com
 GROQ_API_KEY=gsk_...
 
-# JWT secrets — change both to random strings in production
+# JWT — access token TTL + refresh cookie (see config.py for defaults)
 JWT_SECRET_KEY=your-random-jwt-secret
 SECRET_KEY=your-random-flask-secret
+
+# Optional: Redis + Celery worker for /complete pipeline (recommended production)
+# REDIS_URL=redis://localhost:6379/0
+
+# Optional: larger Groq model for text-only Doctor/Patient diarization
+# GROQ_DIARIZE_MODEL=llama-3.3-70b-versatile
 
 # Optional: pyannote audio-based diarization (more accurate than LLM text-based)
 # Requires: pip install pyannote.audio torch torchaudio
@@ -323,24 +331,27 @@ VITE_API_URL=http://localhost:5000
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| POST | `/api/auth/register` | None | Create account |
-| POST | `/api/auth/login` | None | Sign in, returns JWT + user |
-| GET | `/api/auth/me` | Required | Current user from token |
-| POST | `/api/auth/logout` | None | Client-side token discard |
+| POST | `/api/auth/register` | None | Create account; sets refresh cookie |
+| POST | `/api/auth/login` | None | Sign in; returns access JWT + sets refresh cookie |
+| POST | `/api/auth/refresh` | Cookie | New access JWT from httpOnly refresh token |
+| GET | `/api/auth/me` | Required | Current user from access token |
+| POST | `/api/auth/logout` | Cookie | Revokes refresh tokens, clears cookie |
 | POST | `/api/auth/reset-password` | None | Offline password reset |
 
-### Live Session
+### Live session (HTTP + Socket.IO)
 
-| Method | Path | Auth | Description |
+| Method / event | Path / channel | Auth | Description |
 |---|---|---|---|
 | POST | `/api/session/start` | Optional | Create session, returns `session_id` |
-| POST | `/api/session/diarize` | None | Assign Doctor/Patient labels to segments |
+| POST | `/api/session/diarize` | None | HTTP diarize (polling alternative to WS) |
+| emit | `audio_chunk` | Bearer in handshake | Binary WebM window → Whisper → server emits `transcript_update` |
+| emit | `request_diarize` | Bearer | Full-segment relabel → `diarize_update` |
 
 ### Transcription
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| POST | `/api/transcribe` | None | Transcribe audio chunk via Groq Whisper |
+| POST | `/api/transcribe` | None | **ASR page**: multipart full-file transcription via Groq (`60/min` rate limit) |
 
 ### Conversations
 
@@ -348,7 +359,9 @@ VITE_API_URL=http://localhost:5000
 |---|---|---|---|
 | GET | `/api/conversations` | Required | List user's sessions |
 | GET | `/api/conversations/:id` | Required | Session detail with transcript + summary |
-| POST | `/api/conversations/:id/complete` | Required | Finalise session, trigger AI extraction |
+| GET | `/api/conversations/:id/status` | Required | Poll `{ id, status }` after `/complete` |
+| POST | `/api/conversations/:id/complete` | Required | **`202`** — enqueue background pipeline (`processing` → `complete` / `failed`) |
+| GET | `/api/conversations/:id/export/pdf` | Required | Clinical or patient-facing PDF (ReportLab) |
 | PATCH | `/api/conversations/:id` | Required | Update title / approve session |
 | DELETE | `/api/conversations/:id` | Required | Soft delete |
 | PUT | `/api/conversations/:id/summary` | Required | Save summary fields, generate reminders |
@@ -384,31 +397,31 @@ VITE_API_URL=http://localhost:5000
 
 ### High Impact
 
-**1. WebSocket live transcription**
-Replace the 5-second HTTP chunk loop with a persistent WebSocket (`flask-sock`). Browser streams audio; server pushes transcript deltas back. Latency drops from ~5s to ~1s.
+**1. Lower live transcription latency**
+Live path already uses **Socket.IO**. Further wins: shorter window size (trade bandwidth vs latency), regional Groq routing.
 
-**2. Celery task queue**
-Move the `/complete` pipeline (extract → diarize → generate reminders) to a Celery + Redis worker. The API returns `202 Accepted` immediately; frontend polls status. Prevents Groq timeout errors on long sessions.
+**2. Celery operations**
+`/complete` already dispatches **`process_session`** via Celery when `REDIS_URL` is set (`202` + status poll). Ensure workers run in production; tune concurrency for load.
 
 **3. Audio persistence + playback**
 Store each session's `.webm` to Supabase Storage (one extra API call in `transcribe_audio()`). The `AudioFile` model is already scaffolded. Add an audio player to Session Detail for doctor review.
 
 ### Medium Impact
 
-**4. Refresh tokens**
-Add short-lived access token (15 min) + long-lived refresh token in `httpOnly` cookie. Current 7-day JWT has no revocation mechanism.
+**4. Auth hardening**
+Refresh cookies + `/api/auth/refresh` already exist — extend with stricter CSRF/CORS for cookie auth if exposing multi-origin SPAs.
 
 **5. pyannote.audio diarization**
-Set `HF_TOKEN` and `pip install pyannote.audio torch torchaudio`. The code already routes to pyannote automatically when the token is present. Produces much better Doctor/Patient separation than text-only LLM inference.
+Set `HF_TOKEN` and `pip install pyannote.audio torch torchaudio`. The code routes to pyannote when the token is present (Windows: set `FFMPEG_BIN` if TorchCodec DLL errors).
 
 **6. Incremental extraction**
-Call the extraction endpoint every 60 seconds during a live session (not just at end) and merge results. Fields populate while the patient is still talking.
+Already implemented (`POST /api/extract` ~60s during live). Further work: smarter merge/conflict handling between previews and post-session extract.
 
 ### Low Impact / Polish
 
-**7. PDF export** — `pdfkit` or `reportlab` backend endpoint; renders summary + transcript as a clinical note PDF.
+**7. PDF export** — Implemented: `GET /api/conversations/:id/export/pdf` (ReportLab); template preview PDF under templates routes.
 
-**8. Rate limiting** — `Flask-Limiter`: 10 req/min on `/api/auth/login`, 60 req/min on `/api/transcribe`.
+**8. Rate limiting** — Partially deployed: login/register/transcribe limits in `routes/auth.py` and `routes/transcribe.py` via Flask-Limiter.
 
 **9. Full-text search index** — PostgreSQL `tsvector` index on `conversations.title` and `patients.name` for fast search as data grows.
 
