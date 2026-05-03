@@ -10,9 +10,10 @@ Conversation management routes:
   POST   /api/conversations/:id/audio   — upload & store audio file
   PATCH  /api/conversations/:id/reminders/:rid/resolve — resolve a field reminder
   POST   /api/conversations/:id/recommend             — generate AI clinical insights
+  POST   /api/conversations/:id/retry-processing       — admin: re-queue failed/stuck pipeline
 """
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from flask import Blueprint, jsonify, request, g
 from werkzeug.utils import secure_filename
@@ -20,33 +21,80 @@ from extensions import db
 from models.conversation import Conversation, AudioFile
 from models.transcript import Transcript, TranscriptLine
 from models.summary import Summary, FieldReminder
-from utils.auth import require_auth, optional_auth
+from utils.auth import require_auth, optional_auth, require_admin
 from utils.audit import log_action
+from config import Config
 from services.template_service import get_active_template_version_id
-from services.patient_facing_service import generate_patient_facing_summary
 from services import whisper_service
 
 
-def _fill_patient_facing_summary(conv: Conversation, transcript_text: str) -> None:
-    """Populate lay-language patient summary when Groq is available (or fallback)."""
-    if not conv.summary:
-        return
-    specialty = conv.user.specialty if conv.user else None
-    s = conv.summary
-    summary_data = {
-        "patient_name": s.patient_name,
-        "patient_age": s.patient_age,
-        "patient_gender": s.patient_gender,
-        "disease": s.disease,
-        "education": s.education,
-        "emotional_state": s.emotional_state,
-        "additional_notes": s.additional_notes,
-    }
-    s.patient_facing_summary = generate_patient_facing_summary(
-        transcript_text, summary_data, specialty=specialty
-    )
-
 conversations_bp = Blueprint("conversations", __name__, url_prefix="/api/conversations")
+
+
+def reconcile_stale_processing_sessions() -> int:
+    """
+    Clear conversations stuck in status=processing:
+
+    1. Pipeline stuck — POST /complete ran (`processing_started_at` set) but the worker never
+       finished (down Celery, crashes). Failed after PROCESSING_STALE_MINUTES (default 20).
+
+    2. Abandoned recording — `/session/start` created the row but `/complete` never ran
+       (`processing_started_at` still NULL). Failed after RECORDING_PROCESSING_MAX_AGE_HOURS
+       (default 7 days, minimum 24h) based on `created_at`.
+
+    Returns the total number of rows updated.
+    """
+    if not Config.DATABASE_URL:
+        return 0
+
+    now = datetime.now(timezone.utc)
+    changed = 0
+
+    minutes = max(5, Config.PROCESSING_STALE_MINUTES)
+    pipeline_cutoff = now - timedelta(minutes=minutes)
+    pipeline_stuck = (
+        Conversation.query.filter(
+            Conversation.status == "processing",
+            Conversation.deleted_at.is_(None),
+            Conversation.processing_started_at.isnot(None),
+            Conversation.processing_started_at < pipeline_cutoff,
+        )
+        .all()
+    )
+    for c in pipeline_stuck:
+        c.status = "failed"
+        c.processing_started_at = None
+    if pipeline_stuck:
+        changed += len(pipeline_stuck)
+        print(
+            f"[stale-processing] marked {len(pipeline_stuck)} pipeline conversation(s) failed "
+            f"(>{minutes}m since /complete — check Celery worker if REDIS_URL is set)"
+        )
+
+    hours = Config.RECORDING_PROCESSING_MAX_AGE_HOURS
+    abandoned_cutoff = now - timedelta(hours=hours)
+    abandoned = (
+        Conversation.query.filter(
+            Conversation.status == "processing",
+            Conversation.deleted_at.is_(None),
+            Conversation.processing_started_at.is_(None),
+            Conversation.created_at < abandoned_cutoff,
+        )
+        .all()
+    )
+    for c in abandoned:
+        c.status = "failed"
+        c.processing_started_at = None
+    if abandoned:
+        changed += len(abandoned)
+        print(
+            f"[stale-processing] marked {len(abandoned)} abandoned recording(s) failed "
+            f"(processing, no /complete for >{hours}h since created_at)"
+        )
+
+    if changed:
+        db.session.commit()
+    return changed
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -130,6 +178,22 @@ def _merge_parent_summary_into_extraction(conv: Conversation, extraction: dict) 
     fill("Disease", "disease", ("Disease",))
 
     return extraction
+
+
+def segments_from_conversation(conv: Conversation) -> list:
+    """Rebuild live-session segment dicts from stored transcript lines."""
+    if not conv.transcript:
+        return []
+    lines = sorted(conv.transcript.lines, key=lambda ln: ln.line_order)
+    return [
+        {
+            "speaker": ln.speaker or "Speaker 1",
+            "text":    ln.text,
+            "start":   ln.start_time,
+            "end":     ln.end_time,
+        }
+        for ln in lines
+    ]
 
 
 def _save_summary(conv_id: str, extraction: dict, followups: list | None = None) -> None:
@@ -219,6 +283,8 @@ def list_conversations():
         before auth was wired, or from anonymous sessions. These are
         auto-claimed: their user_id is silently updated in this request.
     """
+    reconcile_stale_processing_sessions()
+
     from sqlalchemy import or_
 
     query = (
@@ -238,7 +304,6 @@ def list_conversations():
 
     q = request.args.get("q", "").strip()
     if q:
-        from config import Config
         if Config._is_postgres:
             # Use PostgreSQL full-text search (tsvector GIN index) when available.
             # Falls back to ilike if the column hasn't been added yet.
@@ -313,8 +378,6 @@ def create_conversation():
         _save_summary(conv.id, extraction)
         db.session.flush()  # ensure summary.id is set before generating reminders
         if conv.summary:
-            raw_for_patient = " ".join((s.get("text") or "").strip() for s in segments if s.get("text"))
-            _fill_patient_facing_summary(conv, raw_for_patient)
             _generate_field_reminders(conv.summary)
 
         log_action("session_created", "conversation", conv.id, {"title": conv.title})
@@ -415,6 +478,7 @@ def complete_conversation(conv_id: str):
     try:
         # ── Immediate DB update (synchronous — fast) ──────────────────────
         conv.status   = "processing"   # signals frontend to poll
+        conv.processing_started_at = datetime.now(timezone.utc)
         conv.title    = title
         conv.language = language
         conv.duration = int(duration) if duration else conv.duration
@@ -462,6 +526,8 @@ def conversation_status(conv_id: str):
     Lightweight endpoint the frontend polls every 2s after /complete returns 202.
     Returns only { id, status } to keep the payload tiny.
     """
+    reconcile_stale_processing_sessions()
+
     conv = Conversation.query.get(conv_id)
     if not conv:
         return jsonify({"error": "Conversation not found"}), 404
@@ -471,6 +537,52 @@ def conversation_status(conv_id: str):
         return jsonify({"error": "Access denied"}), 403
 
     return jsonify({"id": conv.id, "status": conv.status}), 200
+
+
+@conversations_bp.route("/<string:conv_id>/retry-processing", methods=["POST"])
+@require_admin
+def admin_retry_processing(conv_id: str):
+    """
+    Re-queue background processing for a failed or stuck session (admin only).
+    Uses transcript lines already in the database when available.
+    """
+    if not _db_available():
+        return jsonify({"error": "Database not configured"}), 503
+
+    conv = Conversation.query.get(conv_id)
+    if not conv:
+        return jsonify({"error": "Conversation not found"}), 404
+
+    if conv.status not in ("failed", "processing"):
+        return jsonify({"error": "Only failed or processing sessions can be retried"}), 400
+
+    segments = segments_from_conversation(conv)
+
+    try:
+        conv.status = "processing"
+        conv.processing_started_at = datetime.now(timezone.utc)
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+    from tasks.process_session import dispatch as dispatch_task
+    from flask import current_app
+
+    task_id = dispatch_task(
+        current_app._get_current_object(),
+        conv_id=conv_id,
+        segments=segments,
+        language=conv.language or "Unknown",
+        duration=conv.duration,
+    )
+
+    return jsonify({
+        "success": True,
+        "conversation_id": conv_id,
+        "status": "processing",
+        "task_id": task_id,
+    }), 202
 
 
 # ── Update ───────────────────────────────────────────────────────────────────

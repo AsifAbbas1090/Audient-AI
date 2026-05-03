@@ -830,7 +830,7 @@ export default function SessionDetailPage() {
                   size="sm"
                   onClick={() => handleExportPdf('patient')}
                   disabled={pdfAudience !== null}
-                  title="Plain-language patient PDF (patient-facing template snapshot)"
+                  title="Patient PDF — extracted fields & follow-ups (patient-facing template)"
                 >
                   {pdfAudience === 'patient'
                     ? <Loader2 size={13} className="animate-spin" />
@@ -1052,21 +1052,6 @@ export default function SessionDetailPage() {
                     Summary
                   </h2>
                   <p className="text-sm text-slate-300 leading-relaxed">{summary.summary_text}</p>
-                </Card>
-              )}
-
-              {summary?.patient_facing_summary && (
-                <Card variant="elevated" className="p-5">
-                  <h2 className="font-semibold text-white light:text-slate-900 text-sm mb-3 flex items-center gap-2">
-                    <User size={14} className="text-brand-400" />
-                    Patient-friendly summary
-                  </h2>
-                  <p className="text-xs text-slate-500 mb-2">
-                    Plain-language narrative used for the patient-facing PDF export.
-                  </p>
-                  <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap">
-                    {summary.patient_facing_summary}
-                  </p>
                 </Card>
               )}
 

@@ -736,7 +736,13 @@ def _build_content_sections(
     audience: str,
 ) -> None:
     ordered = sections or (
-        [{"label": "After-visit summary", "source_key": "patient_facing_summary", "visible": True}]
+        [
+            {"label": "Reason for today's visit", "source_key": "disease", "visible": True},
+            {"label": "How you've been feeling", "source_key": "emotional_state", "visible": True},
+            {"label": "Education / understanding", "source_key": "education", "visible": True},
+            {"label": "Important notes", "source_key": "additional_notes", "visible": True},
+            {"label": "Before your next appointment", "source_key": "follow_up_questions", "visible": True},
+        ]
         if audience == "patient"
         else [
             {"label": "Condition / Diagnosis",  "source_key": "disease",          "visible": True},

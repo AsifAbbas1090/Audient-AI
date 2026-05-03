@@ -7,7 +7,7 @@ Each guidance block tells the LLM:
   - Terminology / tone preferences
   - What follow-up gaps to look for
 
-Used in: extract_service.py, patient_facing_service.py
+Used in: extract_service.py
 """
 from __future__ import annotations
 
@@ -141,43 +141,6 @@ _SPECIALTY_GUIDANCE: dict[str, str] = {
 }
 
 
-# ── Patient-facing tone guidance (injected into patient_facing_service.py) ───
-
-_PATIENT_FACING_GUIDANCE: dict[str, str] = {
-    "general_mbbs": (
-        "Write for a general adult patient. Use everyday language. "
-        "Focus on what was found, what the patient needs to do, and when to seek help."
-    ),
-    "general_practice": (
-        "Focus on self-care actions the patient can take at home, when to return, "
-        "and any lifestyle changes discussed. Acknowledge any chronic conditions warmly "
-        "without being alarmist."
-    ),
-    "cardiology": (
-        "Emphasise what the patient can actively do: take medications as prescribed, "
-        "the importance of the activity level discussed, dietary advice given. "
-        "Include clear, simple warning signs to act on urgently "
-        "(chest pain, severe breathlessness, palpitations with dizziness, fainting). "
-        "Do not use abbreviations like NYHA, AF, or EF without briefly explaining them."
-    ),
-    "psychiatry": (
-        "Write with warmth, care, and zero stigma. Do not label or reproduce any psychiatric "
-        "diagnosis name in the patient copy unless the doctor used that exact term directly with "
-        "the patient. Focus on wellbeing, practical self-care strategies discussed, "
-        "any support or resources mentioned, and 'who to contact if you're struggling' — "
-        "include a general reminder to reach out to the clinic or a crisis line if needed. "
-        "Never reproduce risk assessment language in the patient-facing copy."
-    ),
-    "paediatrics": (
-        "Address the parent or caregiver directly throughout — use 'your child' phrasing. "
-        "Keep language simple and reassuring. Emphasise: when and why to return to the doctor, "
-        "hydration and feeding reminders, and any dosing instructions ONLY if the doctor "
-        "explicitly stated them. Mention red-flag signs in plain language (e.g. 'if your child "
-        "develops a rash that does not fade when you press it, go to the emergency department')."
-    ),
-}
-
-
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def normalize_specialty(raw: str | None) -> str:
@@ -196,7 +159,3 @@ def specialty_prompt_block(raw: str | None) -> str:
     )
 
 
-def patient_facing_tone_block(raw: str | None) -> str:
-    """Return the patient-facing tone guidance for a specialty."""
-    key = normalize_specialty(raw)
-    return _PATIENT_FACING_GUIDANCE.get(key, _PATIENT_FACING_GUIDANCE["general_mbbs"])

@@ -77,15 +77,8 @@ def default_template_schema(specialty: str) -> dict[str, Any]:
 
 
 def default_patient_facing_schema(specialty: str) -> dict[str, Any]:
-    """Default layout for patient-facing PDFs: narrative + key visit facts (matches clinical data sources)."""
+    """Default patient-facing PDF: extracted fields + follow-ups (no separate AI narrative block)."""
     spec = normalize_specialty(specialty)
-    pfs_label = {
-        "psychiatry": "After-visit summary (supportive, clear)",
-        "cardiology": "After-visit summary (heart health)",
-        "paediatrics": "After-visit summary (for parents / guardians)",
-        "general_practice": "After-visit summary (what we agreed today)",
-        "general_mbbs": "After-visit summary (patient)",
-    }.get(spec, "After-visit summary (patient)")
     dx_label = {
         "psychiatry": "Focus of today's visit",
         "cardiology": "Heart-related concern we're addressing",
@@ -103,12 +96,6 @@ def default_patient_facing_schema(specialty: str) -> dict[str, Any]:
     emotional_visible = spec == "psychiatry"
     return {
         "sections": [
-            {
-                "id": "pfs",
-                "label": pfs_label,
-                "source_key": "patient_facing_summary",
-                "visible": True,
-            },
             {
                 "id": "dx_pf",
                 "label": dx_label,

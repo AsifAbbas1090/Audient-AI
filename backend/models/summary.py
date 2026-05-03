@@ -47,7 +47,7 @@ class Summary(db.Model):
     # AI-generated follow-up questions for the next visit
     follow_up_questions = db.Column(db.JSON, nullable=True)   # list[str]
 
-    # Plain-language narrative for patient-facing PDF / sharing (Groq-generated when available)
+    # Legacy: AI patient narrative (unused — patient PDF uses extracted fields). Kept for DB compat / old templates.
     patient_facing_summary = db.Column(db.Text, nullable=True)
 
     created_at = db.Column(db.DateTime(timezone=True), default=_now)
