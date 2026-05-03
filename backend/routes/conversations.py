@@ -152,14 +152,24 @@ def _save_summary(conv_id: str, extraction: dict, followups: list | None = None)
     db.session.add(summary)
 
 
-def _auto_title(segments: list) -> str:
-    """Generate a session title from the first few words of the transcript."""
-    text = " ".join(s.get("text", "") for s in segments[:3]).strip()
-    if len(text) > 60:
-        text = text[:57] + "…"
-    if not text:
-        text = datetime.now(timezone.utc).strftime("Session %b %d, %H:%M")
-    return text
+def _smart_title(extraction: dict | None, segments: list, created_at=None) -> str:
+    """
+    Build a professional session title.
+    Priority: Name + Disease  >  Name + date  >  Consultation + date
+    Falls back to raw transcript only when extraction is absent entirely.
+    """
+    name    = ((extraction or {}).get("Name")    or "").strip()
+    disease = ((extraction or {}).get("Disease") or "").strip()
+    ref     = created_at or datetime.now(timezone.utc)
+    date_str = ref.strftime("%b %d, %Y")
+
+    if name and disease:
+        return f"{name} — {disease}"[:120]
+    if name:
+        return f"{name} · {date_str}"[:120]
+    if disease:
+        return f"Consultation — {disease} · {date_str}"[:120]
+    return f"Consultation · {date_str}"
 
 
 # Field severity map — determines which missing fields raise alerts and at what level
@@ -282,7 +292,7 @@ def create_conversation():
     extraction = data.get("extraction") or {}
     duration   = data.get("duration")
     language   = data.get("language") or "Unknown"
-    title      = (data.get("title") or "").strip() or _auto_title(segments)
+    title      = (data.get("title") or "").strip() or _smart_title(extraction, segments)
     user_id    = getattr(g, "user_id", None)
 
     try:
@@ -400,7 +410,7 @@ def complete_conversation(conv_id: str):
     segments = data.get("segments") or []
     duration = data.get("duration")
     language = (data.get("language") or conv.language or "Unknown")
-    title    = (data.get("title") or "").strip() or _auto_title(segments)
+    title    = (data.get("title") or "").strip() or _smart_title(None, segments)
 
     try:
         # ── Immediate DB update (synchronous — fast) ──────────────────────
@@ -796,7 +806,7 @@ def continue_session(conv_id: str):
     try:
         cont = Conversation(
             user_id=g.user_id,
-            title=f"Follow-up: {parent.title or 'session'}",
+            title=f"Follow-up · {parent.title or _smart_title(None, [])}",
             status="processing",
             language=parent.language,
             parent_id=conv_id,

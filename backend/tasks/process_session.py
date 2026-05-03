@@ -61,7 +61,7 @@ def process_session_task(
         _save_transcript,
         _save_summary,
         _generate_field_reminders,
-        _auto_title,
+        _smart_title,
         _merge_parent_summary_into_extraction,
     )
 
@@ -192,7 +192,11 @@ def process_session_task(
 
         # ── Phase 4: finalise ─────────────────────────────────────────────
         conv.status   = "complete"
-        conv.title    = conv.title or _auto_title(segments)
+        conv.title    = _smart_title(
+            extraction if good_extraction else None,
+            segments,
+            conv.created_at,
+        )
         conv.language = language or conv.language or "Unknown"
         if duration:
             conv.duration = duration

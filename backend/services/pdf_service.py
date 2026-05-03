@@ -787,6 +787,73 @@ def _build_content_sections(
         story.append(row)
 
 
+def _build_prescription_section(
+    story: list,
+    summary,
+    tr: "PdfThemeResolved",
+    st: dict,
+    W: float,
+) -> None:
+    """Render Doctor's Prescription block when any prescription data exists."""
+    meds  = getattr(summary, "prescription_medicines",    None) or []
+    tests = getattr(summary, "prescription_tests",        None) or []
+    instr = (getattr(summary, "prescription_instructions", None) or "").strip()
+
+    if not meds and not tests and not instr:
+        return
+
+    story.append(Spacer(1, 0.3 * cm))
+    story.append(KeepTogether([
+        _section_heading("Doctor's Prescription", tr, st, W),
+        Spacer(1, 0.18 * cm),
+    ]))
+
+    def _bullet_rows(items: list, label: str) -> None:
+        if not items:
+            return
+        row = Table(
+            [[Paragraph(label, st["field_name"]),
+              Paragraph("<br/>".join(f"• {str(x).strip()}" for x in items if str(x).strip()), st["notes"])]],
+            colWidths=[W * 0.22, W * 0.78],
+        )
+        row.setStyle(TableStyle([
+            ("TOPPADDING",    (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ("LEFTPADDING",   (0, 0), (0, 0),   8),
+            ("RIGHTPADDING",  (0, 0), (0, 0),   6),
+            ("LEFTPADDING",   (1, 0), (1, 0),  10),
+            ("RIGHTPADDING",  (1, 0), (1, 0),   0),
+            ("VALIGN",        (0, 0), (-1, -1), "TOP"),
+            ("LINEBELOW",     (0, 0), (-1, 0),  0.4, tr.rule),
+            ("BACKGROUND",    (0, 0), (0, 0),   tr.panel),
+            ("LINEBEFORE",    (0, 0), (0, 0),   2.5, tr.accent),
+        ]))
+        story.append(row)
+
+    _bullet_rows(meds,  "Medicines")
+    _bullet_rows(tests, "Tests Ordered")
+
+    if instr:
+        row = Table(
+            [[Paragraph("Instructions", st["field_name"]),
+              Paragraph(instr.replace("\n", "<br/>"), st["notes"])]],
+            colWidths=[W * 0.22, W * 0.78],
+        )
+        row.setStyle(TableStyle([
+            ("TOPPADDING",    (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ("LEFTPADDING",   (0, 0), (0, 0),   8),
+            ("RIGHTPADDING",  (0, 0), (0, 0),   6),
+            ("LEFTPADDING",   (1, 0), (1, 0),  10),
+            ("RIGHTPADDING",  (1, 0), (1, 0),   0),
+            ("VALIGN",        (0, 0), (-1, -1), "TOP"),
+            ("LINEBELOW",     (0, 0), (-1, 0),  0.4, tr.rule),
+            ("BACKGROUND",    (0, 0), (0, 0),   tr.panel),
+            ("LINEBEFORE",    (0, 0), (0, 0),   2.5, tr.accent),
+        ]))
+        story.append(row)
+
+
 def _build_signature_block(
     story: list, branding: dict, tr: PdfThemeResolved, st: dict, W: float, audience: str
 ) -> None:
@@ -958,6 +1025,7 @@ def generate_session_pdf(conv: "Conversation", audience: str = "clinical") -> by
         if isinstance(summary.extracted_entities, dict):
             source_map.update(summary.extracted_entities)
         _build_content_sections(story, sections, source_map, tr, st, W, audience)
+        _build_prescription_section(story, summary, tr, st, W)
     else:
         story.append(Paragraph("No summary available.", st["label"]))
 
