@@ -7,7 +7,7 @@ import {
   Pencil, X, Check, Plus, Lock, ShieldCheck, Bell,
   Sparkles, FlaskConical, Stethoscope, TriangleAlert, RefreshCw,
   UserSearch, UserPlus, Phone, Link2, Unlink, LayoutTemplate,
-  MessageSquare, Shield, Send, ChevronDown, Trash2,
+  MessageSquare, Shield, Send, ChevronDown, ChevronRight, Trash2,
   Pill, ClipboardList, TestTube,
 } from 'lucide-react'
 import { Sidebar }       from '../components/ui/Sidebar'
@@ -233,9 +233,10 @@ export default function SessionDetailPage() {
   const [savingSummary, setSavingSummary] = useState(false)
 
   // Prescription editing
-  const [editingRx,  setEditingRx]  = useState(false)
-  const [rxDraft,    setRxDraft]    = useState<PrescriptionDraft>({ medicines: [], tests: [], instructions: '' })
-  const [savingRx,   setSavingRx]   = useState(false)
+  const [editingRx,   setEditingRx]   = useState(false)
+  const [rxDraft,     setRxDraft]     = useState<PrescriptionDraft>({ medicines: [], tests: [], instructions: '' })
+  const [savingRx,    setSavingRx]    = useState(false)
+  const [showRxModal, setShowRxModal] = useState(false)
 
   // Phase 2/3 — consult modal
   const [showConsultModal, setShowConsultModal] = useState(false)
@@ -400,8 +401,8 @@ export default function SessionDetailPage() {
     setEditingRx(true)
   }
 
-  async function saveRx() {
-    if (!conv) return
+  async function saveRx(): Promise<boolean> {
+    if (!conv) return false
     setSavingRx(true)
     try {
       const res = await api.patch(`/api/conversations/${conv.id}/summary`, {
@@ -412,8 +413,10 @@ export default function SessionDetailPage() {
       setConv(prev => prev ? { ...prev, summary: res.data.summary } : prev)
       setEditingRx(false)
       toast('Prescription saved', 'success')
+      return true
     } catch {
       toast('Could not save prescription', 'error')
+      return false
     } finally {
       setSavingRx(false)
     }
@@ -1189,207 +1192,45 @@ export default function SessionDetailPage() {
                 )}
               </Card>
 
-              {/* Prescription card */}
-              {isOwner && (conv.status === 'complete' || conv.status === 'approved') && (
-                <Card variant="elevated" className="p-5">
-                  <div className="flex items-center justify-between mb-4">
-                    <h2 className="font-semibold text-white light:text-slate-900 text-sm flex items-center gap-2">
-                      <ClipboardList size={14} className="text-emerald-400" />
-                      Doctor's Prescription
-                    </h2>
-                    {!editingRx && conv.status !== 'approved' && (
-                      <button
-                        onClick={startEditRx}
-                        className="flex items-center gap-1 text-xs text-slate-400 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg px-2.5 py-1 transition-colors"
-                      >
-                        <Pencil size={10} />
-                        Edit
-                      </button>
-                    )}
-                    {editingRx && (
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={saveRx}
-                          disabled={savingRx}
-                          className="flex items-center gap-1.5 text-xs text-emerald-400 hover:text-emerald-300 disabled:opacity-50 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-2.5 py-1 transition-colors"
-                        >
-                          {savingRx ? <Loader2 size={10} className="animate-spin" /> : <Check size={10} />}
-                          Save
-                        </button>
-                        <button
-                          onClick={cancelEditRx}
-                          className="flex items-center gap-1 text-xs text-slate-400 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg px-2.5 py-1 transition-colors"
-                        >
-                          <X size={10} />
-                          Cancel
-                        </button>
-                      </div>
-                    )}
-                  </div>
-
-                  {editingRx ? (
-                    <div className="space-y-4">
-                      {/* Medicines */}
-                      <div>
-                        <div className="flex items-center justify-between mb-2">
-                          <label className="flex items-center gap-1.5 text-[10px] font-semibold text-slate-500 uppercase tracking-wide">
-                            <Pill size={10} />
-                            Medicines
-                          </label>
-                          <button
-                            onClick={() => setRxDraft(d => ({ ...d, medicines: [...d.medicines, ''] }))}
-                            className="flex items-center gap-1 text-[10px] text-brand-400 hover:text-brand-300"
-                          >
-                            <Plus size={10} /> Add
-                          </button>
+              {/* Prescription trigger — opens modal */}
+              {isOwner && (conv.status === 'complete' || conv.status === 'approved') && (() => {
+                const meds  = conv.summary?.prescription_medicines  ?? []
+                const tests = conv.summary?.prescription_tests      ?? []
+                const instr = conv.summary?.prescription_instructions
+                const parts = [
+                  meds.length  ? `${meds.length} medicine${meds.length > 1 ? 's' : ''}` : '',
+                  tests.length ? `${tests.length} test${tests.length > 1 ? 's' : ''}` : '',
+                  instr        ? 'instructions' : '',
+                ].filter(Boolean)
+                return (
+                  <button
+                    onClick={() => setShowRxModal(true)}
+                    className="w-full text-left group"
+                  >
+                    <Card variant="elevated" className="p-4 hover:border-emerald-500/30 transition-colors cursor-pointer">
+                      <div className="flex items-center gap-3">
+                        <div className="p-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 shrink-0">
+                          <ClipboardList size={14} className="text-emerald-400" />
                         </div>
-                        <div className="space-y-1.5">
-                          {rxDraft.medicines.map((med, i) => (
-                            <div key={i} className="flex items-center gap-2">
-                              <input
-                                value={med}
-                                onChange={e => setRxDraft(d => {
-                                  const m = [...d.medicines]; m[i] = e.target.value; return { ...d, medicines: m }
-                                })}
-                                placeholder="e.g. Panadol 500mg twice daily"
-                                className="flex-1 bg-white/5 light:bg-white border border-white/10 light:border-slate-200 rounded-lg px-3 py-1.5 text-sm text-white light:text-slate-900 placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-brand-500"
-                              />
-                              <button
-                                onClick={() => setRxDraft(d => ({ ...d, medicines: d.medicines.filter((_, j) => j !== i) }))}
-                                className="text-slate-500 hover:text-red-400 transition-colors"
-                              >
-                                <X size={13} />
-                              </button>
-                            </div>
-                          ))}
-                          {rxDraft.medicines.length === 0 && (
-                            <p className="text-xs text-slate-600 italic">No medicines added yet.</p>
-                          )}
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-semibold text-white light:text-slate-900">Doctor's Prescription</p>
+                          <p className="text-[11px] text-slate-500 truncate mt-0.5">
+                            {parts.length === 0
+                              ? conv.status !== 'approved' ? 'Tap to add medicines, tests & instructions' : 'No prescription'
+                              : parts.join(' · ')}
+                          </p>
                         </div>
-                      </div>
-
-                      {/* Tests */}
-                      <div>
-                        <div className="flex items-center justify-between mb-2">
-                          <label className="flex items-center gap-1.5 text-[10px] font-semibold text-slate-500 uppercase tracking-wide">
-                            <TestTube size={10} />
-                            Tests Ordered
-                          </label>
-                          <button
-                            onClick={() => setRxDraft(d => ({ ...d, tests: [...d.tests, ''] }))}
-                            className="flex items-center gap-1 text-[10px] text-brand-400 hover:text-brand-300"
-                          >
-                            <Plus size={10} /> Add
-                          </button>
-                        </div>
-                        <div className="space-y-1.5">
-                          {rxDraft.tests.map((test, i) => (
-                            <div key={i} className="flex items-center gap-2">
-                              <input
-                                value={test}
-                                onChange={e => setRxDraft(d => {
-                                  const t = [...d.tests]; t[i] = e.target.value; return { ...d, tests: t }
-                                })}
-                                placeholder="e.g. CBC, X-Ray Chest PA"
-                                className="flex-1 bg-white/5 light:bg-white border border-white/10 light:border-slate-200 rounded-lg px-3 py-1.5 text-sm text-white light:text-slate-900 placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-brand-500"
-                              />
-                              <button
-                                onClick={() => setRxDraft(d => ({ ...d, tests: d.tests.filter((_, j) => j !== i) }))}
-                                className="text-slate-500 hover:text-red-400 transition-colors"
-                              >
-                                <X size={13} />
-                              </button>
-                            </div>
-                          ))}
-                          {rxDraft.tests.length === 0 && (
-                            <p className="text-xs text-slate-600 italic">No tests added yet.</p>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Instructions */}
-                      <div>
-                        <label className="flex items-center gap-1.5 text-[10px] font-semibold text-slate-500 uppercase tracking-wide mb-2">
-                          <StickyNote size={10} />
-                          Instructions / Advice
-                        </label>
-                        <textarea
-                          value={rxDraft.instructions}
-                          onChange={e => setRxDraft(d => ({ ...d, instructions: e.target.value }))}
-                          placeholder="e.g. Take rest for 3 days, drink plenty of water, avoid cold drinks…"
-                          rows={3}
-                          className="w-full bg-white/5 light:bg-white border border-white/10 light:border-slate-200 rounded-xl px-3 py-2 text-sm text-white light:text-slate-900 placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-brand-500 resize-none"
-                        />
-                      </div>
-                    </div>
-                  ) : (() => {
-                    const meds  = conv.summary?.prescription_medicines    ?? []
-                    const tests = conv.summary?.prescription_tests        ?? []
-                    const instr = conv.summary?.prescription_instructions
-                    const hasAny = meds.length > 0 || tests.length > 0 || !!instr
-
-                    if (!hasAny) return (
-                      <div className="py-5 text-center">
-                        <ClipboardList size={22} className="mx-auto mb-2 text-slate-600" />
-                        <p className="text-xs text-slate-500">No prescription added yet.</p>
-                        {conv.status !== 'approved' && (
-                          <p className="text-xs text-slate-600 mt-1">Click Edit to add medicines, tests, and instructions.</p>
+                        {parts.length > 0 && (
+                          <span className="shrink-0 text-[10px] font-medium text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-full px-2 py-0.5">
+                            {meds.length + tests.length + (instr ? 1 : 0)}
+                          </span>
                         )}
+                        <ChevronRight size={14} className="text-slate-600 group-hover:text-slate-400 shrink-0 transition-colors" />
                       </div>
-                    )
-
-                    return (
-                      <div className="space-y-4">
-                        {meds.length > 0 && (
-                          <div>
-                            <div className="flex items-center gap-1.5 text-[10px] font-semibold text-emerald-400 uppercase tracking-wide mb-2">
-                              <Pill size={10} />
-                              Medicines
-                            </div>
-                            <ul className="space-y-1">
-                              {meds.map((m, i) => (
-                                <li key={i} className="flex items-start gap-2 text-sm text-slate-300 bg-emerald-500/5 border border-emerald-500/15 rounded-lg px-3 py-2">
-                                  <span className="mt-0.5 shrink-0 opacity-50">·</span>
-                                  {m}
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
-                        )}
-
-                        {tests.length > 0 && (
-                          <div>
-                            <div className="flex items-center gap-1.5 text-[10px] font-semibold text-sky-400 uppercase tracking-wide mb-2">
-                              <TestTube size={10} />
-                              Tests Ordered
-                            </div>
-                            <ul className="space-y-1">
-                              {tests.map((t, i) => (
-                                <li key={i} className="flex items-start gap-2 text-sm text-slate-300 bg-sky-500/5 border border-sky-500/15 rounded-lg px-3 py-2">
-                                  <span className="mt-0.5 shrink-0 opacity-50">·</span>
-                                  {t}
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
-                        )}
-
-                        {instr && (
-                          <div>
-                            <div className="flex items-center gap-1.5 text-[10px] font-semibold text-amber-400 uppercase tracking-wide mb-2">
-                              <StickyNote size={10} />
-                              Instructions / Advice
-                            </div>
-                            <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap bg-amber-500/5 border border-amber-500/15 rounded-lg px-3 py-2">
-                              {instr}
-                            </p>
-                          </div>
-                        )}
-                      </div>
-                    )
-                  })()}
-                </Card>
-              )}
+                    </Card>
+                  </button>
+                )
+              })()}
 
               {/* Clinical Insights card */}
               {isOwner && (conv.status === 'complete' || conv.status === 'approved') && (
@@ -1978,6 +1819,202 @@ export default function SessionDetailPage() {
           </div>
         </div>
       </main>
+
+      {/* ── Prescription modal ──────────────────────────────── */}
+      {showRxModal && conv && isOwner && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => { setShowRxModal(false); if (editingRx) cancelEditRx() }}
+          />
+          <div className="relative z-10 w-full max-w-lg bg-surface-200 light:bg-white border border-white/10 light:border-slate-200 rounded-2xl shadow-2xl flex flex-col max-h-[90vh]">
+
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-white/8 light:border-slate-200/80 shrink-0">
+              <h2 className="font-semibold text-white light:text-slate-900 text-sm flex items-center gap-2">
+                <ClipboardList size={15} className="text-emerald-400" />
+                Doctor's Prescription
+              </h2>
+              <div className="flex items-center gap-2">
+                {!editingRx && conv.status !== 'approved' && (
+                  <button
+                    onClick={startEditRx}
+                    className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg px-3 py-1.5 transition-colors"
+                  >
+                    <Pencil size={11} /> Edit
+                  </button>
+                )}
+                {editingRx && (
+                  <>
+                    <button
+                      onClick={async () => { const ok = await saveRx(); if (ok) setShowRxModal(false) }}
+                      disabled={savingRx}
+                      className="flex items-center gap-1.5 text-xs text-emerald-400 hover:text-emerald-300 disabled:opacity-50 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-1.5 transition-colors"
+                    >
+                      {savingRx ? <Loader2 size={11} className="animate-spin" /> : <Check size={11} />}
+                      Save
+                    </button>
+                    <button
+                      onClick={() => { cancelEditRx(); setShowRxModal(false) }}
+                      className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg px-3 py-1.5 transition-colors"
+                    >
+                      <X size={11} /> Cancel
+                    </button>
+                  </>
+                )}
+                <button
+                  onClick={() => { setShowRxModal(false); if (editingRx) cancelEditRx() }}
+                  className="p-1.5 text-slate-500 hover:text-white rounded-lg hover:bg-white/8 transition-colors"
+                >
+                  <X size={15} />
+                </button>
+              </div>
+            </div>
+
+            {/* Body */}
+            <div className="p-5 overflow-y-auto flex-1">
+              {editingRx ? (
+                <div className="space-y-5">
+
+                  {/* Medicines */}
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-400 uppercase tracking-wide">
+                        <Pill size={12} className="text-emerald-400" /> Medicines
+                      </label>
+                      <button
+                        onClick={() => setRxDraft(d => ({ ...d, medicines: [...d.medicines, ''] }))}
+                        className="flex items-center gap-1 text-xs text-emerald-400 hover:text-emerald-300 transition-colors"
+                      >
+                        <Plus size={12} /> Add
+                      </button>
+                    </div>
+                    <div className="space-y-2">
+                      {rxDraft.medicines.map((med, i) => (
+                        <div key={i} className="flex items-center gap-2">
+                          <input
+                            value={med}
+                            onChange={e => setRxDraft(d => { const m = [...d.medicines]; m[i] = e.target.value; return { ...d, medicines: m } })}
+                            placeholder="e.g. Panadol 500mg twice daily"
+                            className="flex-1 bg-white/5 light:bg-white border border-white/10 light:border-slate-200 rounded-xl px-3 py-2 text-sm text-white light:text-slate-900 placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-brand-500"
+                          />
+                          <button onClick={() => setRxDraft(d => ({ ...d, medicines: d.medicines.filter((_, j) => j !== i) }))} className="text-slate-500 hover:text-red-400 transition-colors p-1">
+                            <X size={14} />
+                          </button>
+                        </div>
+                      ))}
+                      {rxDraft.medicines.length === 0 && <p className="text-xs text-slate-600 italic py-1">No medicines added yet.</p>}
+                    </div>
+                  </div>
+
+                  {/* Tests */}
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-400 uppercase tracking-wide">
+                        <TestTube size={12} className="text-sky-400" /> Tests Ordered
+                      </label>
+                      <button
+                        onClick={() => setRxDraft(d => ({ ...d, tests: [...d.tests, ''] }))}
+                        className="flex items-center gap-1 text-xs text-sky-400 hover:text-sky-300 transition-colors"
+                      >
+                        <Plus size={12} /> Add
+                      </button>
+                    </div>
+                    <div className="space-y-2">
+                      {rxDraft.tests.map((test, i) => (
+                        <div key={i} className="flex items-center gap-2">
+                          <input
+                            value={test}
+                            onChange={e => setRxDraft(d => { const t = [...d.tests]; t[i] = e.target.value; return { ...d, tests: t } })}
+                            placeholder="e.g. CBC, X-Ray Chest PA"
+                            className="flex-1 bg-white/5 light:bg-white border border-white/10 light:border-slate-200 rounded-xl px-3 py-2 text-sm text-white light:text-slate-900 placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-brand-500"
+                          />
+                          <button onClick={() => setRxDraft(d => ({ ...d, tests: d.tests.filter((_, j) => j !== i) }))} className="text-slate-500 hover:text-red-400 transition-colors p-1">
+                            <X size={14} />
+                          </button>
+                        </div>
+                      ))}
+                      {rxDraft.tests.length === 0 && <p className="text-xs text-slate-600 italic py-1">No tests added yet.</p>}
+                    </div>
+                  </div>
+
+                  {/* Instructions */}
+                  <div>
+                    <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">
+                      <StickyNote size={12} className="text-amber-400" /> Instructions / Advice
+                    </label>
+                    <textarea
+                      value={rxDraft.instructions}
+                      onChange={e => setRxDraft(d => ({ ...d, instructions: e.target.value }))}
+                      placeholder="e.g. Take rest for 3 days, drink plenty of water, avoid cold drinks…"
+                      rows={4}
+                      className="w-full bg-white/5 light:bg-white border border-white/10 light:border-slate-200 rounded-xl px-3 py-2.5 text-sm text-white light:text-slate-900 placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-brand-500 resize-none"
+                    />
+                  </div>
+
+                </div>
+              ) : (() => {
+                const meds  = conv.summary?.prescription_medicines    ?? []
+                const tests = conv.summary?.prescription_tests        ?? []
+                const instr = conv.summary?.prescription_instructions
+                const hasAny = meds.length > 0 || tests.length > 0 || !!instr
+                if (!hasAny) return (
+                  <div className="py-12 text-center">
+                    <ClipboardList size={28} className="mx-auto mb-3 text-slate-600" />
+                    <p className="text-sm text-slate-400">No prescription added yet.</p>
+                    {conv.status !== 'approved' && (
+                      <p className="text-xs text-slate-600 mt-1.5">Click Edit to add medicines, tests & instructions.</p>
+                    )}
+                  </div>
+                )
+                return (
+                  <div className="space-y-5">
+                    {meds.length > 0 && (
+                      <div>
+                        <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-400 uppercase tracking-wide mb-2.5">
+                          <Pill size={12} /> Medicines
+                        </div>
+                        <ul className="space-y-1.5">
+                          {meds.map((m, i) => (
+                            <li key={i} className="flex items-start gap-2 text-sm text-slate-300 bg-emerald-500/5 border border-emerald-500/15 rounded-xl px-3 py-2.5">
+                              <span className="mt-0.5 shrink-0 text-emerald-500">·</span>{m}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {tests.length > 0 && (
+                      <div>
+                        <div className="flex items-center gap-1.5 text-xs font-semibold text-sky-400 uppercase tracking-wide mb-2.5">
+                          <TestTube size={12} /> Tests Ordered
+                        </div>
+                        <ul className="space-y-1.5">
+                          {tests.map((t, i) => (
+                            <li key={i} className="flex items-start gap-2 text-sm text-slate-300 bg-sky-500/5 border border-sky-500/15 rounded-xl px-3 py-2.5">
+                              <span className="mt-0.5 shrink-0 text-sky-500">·</span>{t}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {instr && (
+                      <div>
+                        <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-400 uppercase tracking-wide mb-2.5">
+                          <StickyNote size={12} /> Instructions / Advice
+                        </div>
+                        <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap bg-amber-500/5 border border-amber-500/15 rounded-xl px-3 py-2.5">
+                          {instr}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
+            </div>
+
+          </div>
+        </div>
+      )}
 
       {/* ── Consult modal ───────────────────────────────────── */}
       {showConsultModal && conv && (
