@@ -94,8 +94,32 @@ def handle_disconnect():
 # Module-level dict: { sid: { user_id, role } }
 _socket_meta: dict = {}
 
-# Rolling transcript context per session — bounded tail sent as Whisper prompt context.
+# Rolling transcript context per session — stored as speaker-labeled lines so Whisper
+# carries both text and speaker identity forward into the next chunk.
 _session_context: dict = {}  # session_id → str (≤ whisper_service.WHISPER_ROLLING_CONTEXT_MAX)
+
+# Cross-call diarization memory — confirmed example lines per speaker per session.
+# Passed into diarize_with_groq to keep labels consistent across the 15s polling window.
+_session_diarize_labels: dict = {}  # session_id → {"doctor": [str], "patient": [str]}
+
+
+def _update_diarize_labels(session_id: str, labeled: list) -> None:
+    """Accumulate a small bank of confirmed Doctor/Patient example lines per session."""
+    if not session_id:
+        return
+    bank = _session_diarize_labels.setdefault(session_id, {"doctor": [], "patient": []})
+    for seg in labeled:
+        text = (seg.get("text") or "").strip()
+        if len(text) < 12:
+            continue
+        role = (seg.get("speaker") or "").lower()
+        if "doctor" in role:
+            bank["doctor"].append(text)
+        elif "patient" in role:
+            bank["patient"].append(text)
+    # Keep most recent 6 examples per role to bound memory
+    bank["doctor"]  = bank["doctor"][-6:]
+    bank["patient"] = bank["patient"][-6:]
 
 
 # ── Session room ──────────────────────────────────────────────────────────────
@@ -152,12 +176,18 @@ def handle_audio_chunk(data):
             return  # skip Groq call for silent chunks
 
         # ── Transcribe ───────────────────────────────────────────────────
-        # Pass prior context so Whisper continues naturally across 1-second chunks
-        # instead of starting cold and potentially mis-transcribing the first word.
+        # Pass prior context as speaker-labeled lines so Whisper carries both
+        # text continuity AND speaker identity forward into the next chunk.
         prior_context = _session_context.get(session_id, "") if session_id else ""
+
+        # Use transcribe (not translate) when a specific language is already confirmed —
+        # transcribing in the source language is more accurate; translation is done
+        # separately by the extraction LLM which handles non-English well.
+        task = "transcribe" if lang_hint else "translate"
+
         result   = whisper_service.transcribe(
             tmp_path,
-            task="translate",
+            task=task,
             language_hint=lang_hint,
             context=prior_context or None,
         )
@@ -167,10 +197,15 @@ def handle_audio_chunk(data):
         if not segments:
             return
 
-        # ── Update rolling context for next chunk ────────────────────────
+        # ── Update rolling context (speaker-labeled) for next chunk ──────
+        # "[Doctor]: text [Patient]: text" format helps Whisper continue
+        # with the right speaker register on the very first word of each chunk.
         if session_id:
-            new_text = " ".join(s.get("text", "").strip() for s in segments)
-            combined = f"{prior_context} {new_text}".strip()
+            new_lines = " ".join(
+                f"[{s.get('speaker') or 'Speaker'}]: {s.get('text', '').strip()}"
+                for s in segments if s.get("text", "").strip()
+            )
+            combined = f"{prior_context} {new_lines}".strip()
             _session_context[session_id] = combined[
                 -whisper_service.WHISPER_ROLLING_CONTEXT_MAX:
             ]
@@ -203,9 +238,10 @@ def handle_audio_chunk(data):
             "is_final": is_final,
         })
 
-        # Free context memory when session ends
+        # Free all session memory when recording ends
         if is_final and session_id:
             _session_context.pop(session_id, None)
+            _session_diarize_labels.pop(session_id, None)
 
     except Exception as exc:
         print(f"[WS/chunk] error: {exc}")
@@ -258,14 +294,16 @@ def handle_request_diarize(data):
                 except Exception as e:
                     print(f"[WS/diarize] pyannote failed: {e} — falling back to Groq LLM")
 
-        # ── Path 2: Groq LLM text-based ──────────────────────────────────
+        # ── Path 2: Groq LLM text-based (70B with cross-call memory) ────
         if Config.GROQ_API_KEY and len(segments) >= 2:
             from services.diarize_service import diarize_with_groq, split_segments_by_sentence
-            # Expand multi-sentence segments before labelling — the LLM assigns
-            # speakers per sentence, which dramatically improves accuracy when
-            # Whisper returns a few large chunks instead of many short ones.
-            expanded = split_segments_by_sentence(segments)
-            labeled = diarize_with_groq(expanded)
+            # Expand multi-sentence segments — LLM assigns per sentence, not per
+            # Whisper chunk, so accuracy is much better on long segments.
+            expanded    = split_segments_by_sentence(segments)
+            prior_ctx   = _session_diarize_labels.get(session_id)
+            labeled     = diarize_with_groq(expanded, prior_labels=prior_ctx)
+            # Persist confirmed examples so the next diarize call stays consistent
+            _update_diarize_labels(session_id, labeled)
             emit("diarize_update", {"segments": labeled, "method": "groq_llm"})
 
     except Exception as exc:

@@ -50,16 +50,73 @@ def split_segments_by_sentence(segments: List[Dict[str, Any]]) -> List[Dict[str,
     return result
 
 
-def diarize_with_groq(segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+_DIARIZE_SYSTEM = (
+    "You are a clinical transcription analyst. "
+    "Identify speakers in medical consultations. Reply only with valid JSON."
+)
+
+_DIARIZE_PROMPT = """\
+Doctor-patient medical consultation. Assign each segment to "Doctor" or "Patient".
+
+DOCTOR speaks like:
+  • Clinical terms: diagnosis, prescription, dosage, CBC, ECG, referral, hypertension, diabetes
+  • Directed questions: "How long have you had this?", "Any allergies?", "Where is the pain?"
+  • Instructions: "Take twice daily", "Avoid spicy food", "Come back in a week"
+  • Interpreting results: "Your BP is elevated", "The scan shows...", "Blood work is normal"
+  • Usually speaks FIRST and leads the conversation
+
+PATIENT speaks like:
+  • Symptoms: "I've been feeling...", "It started...", "The pain is here"
+  • Answers: "Yes doctor", "About 3 days", "No I haven't taken anything"
+  • Concerns: "Will it get better?", "Is it serious?", "Can I go to work?"
+  • Personal history: "I had this before", "I'm diabetic", "My mother had..."
+
+{context_block}
+
+Return ONLY a JSON array — no explanation, no markdown:
+[{{"id": <number>, "speaker": "Doctor" | "Patient"}}, ...]
+
+Segments:
+{segments_text}"""
+
+_CTX_ESTABLISHED = (
+    "ESTABLISHED CONTEXT from earlier in this session:\n"
+    "  Doctor said things like: {doctor_samples}\n"
+    "  Patient said things like: {patient_samples}\n"
+    "Use these to maintain speaker consistency."
+)
+_CTX_COLD = (
+    "CONTEXT: First pass — infer Doctor vs Patient purely from clinical language and turn-taking."
+)
+
+
+def _build_context_block(prior_labels: Optional[Dict]) -> str:
+    if not prior_labels:
+        return _CTX_COLD
+    doc = [t for t in (prior_labels.get("doctor") or []) if t.strip()]
+    pat = [t for t in (prior_labels.get("patient") or []) if t.strip()]
+    if not doc and not pat:
+        return _CTX_COLD
+    return _CTX_ESTABLISHED.format(
+        doctor_samples="; ".join(f'"{t[:60]}"' for t in doc[:3]),
+        patient_samples="; ".join(f'"{t[:60]}"' for t in pat[:3]),
+    )
+
+
+def diarize_with_groq(
+    segments: List[Dict[str, Any]],
+    prior_labels: Optional[Dict] = None,
+) -> List[Dict[str, Any]]:
     """
-    Use Groq LLM to assign speaker labels from transcript context alone.
+    Use Groq LLM (70B) to assign Doctor/Patient speaker labels from transcript text.
 
-    Strategy: send the numbered segment texts to llama-3.1-8b-instant and ask it
-    to label each line as "Doctor" or "Patient".  Map Doctor→Speaker 1,
-    Patient→Speaker 2 so the labels match what the frontend already expects.
+    Args:
+        segments:     list of {text, start, end, speaker, ...}
+        prior_labels: optional {"doctor": [example texts], "patient": [example texts]}
+                      built up across successive calls within a session for consistency.
 
-    Falls back silently to the original segments on any error.
-    Requires at least 2 segments with real text to attempt labelling.
+    Returns segments with speaker set to "Doctor" or "Patient".
+    Falls back to original segments on any error.
     """
     from config import Config
 
@@ -68,60 +125,64 @@ def diarize_with_groq(segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
     text_segs = [s for s in segments if (s.get("text") or "").strip()]
     if len(text_segs) < 2:
-        return segments   # not enough context
+        return segments
 
     try:
-        numbered = "\n".join(
-            f"{i + 1}. {s['text'].strip()}"
-            for i, s in enumerate(text_segs)
+        # Build numbered segment list with stable IDs for robust parsing
+        seg_ids   = list(range(1, len(text_segs) + 1))
+        seg_lines = "\n".join(
+            f'  {{"id": {sid}, "text": "{s["text"].strip().replace(chr(34), chr(39))}"}}'
+            for sid, s in zip(seg_ids, text_segs)
         )
 
-        prompt = (
-            "You are analyzing a medical consultation transcript between a doctor and a patient.\n"
-            "Label each numbered line as either \"Doctor\" or \"Patient\".\n\n"
-            "Rules:\n"
-            "- Doctors ask clinical questions, give diagnoses, prescribe medicines, explain conditions.\n"
-            "- Patients describe symptoms, answer questions, share history, ask about treatment.\n"
-            "- If you are unsure, look at conversational flow (doctor usually speaks first).\n\n"
-            "Return ONLY a JSON array with one label per line, in order.\n"
-            "Example for 4 lines: [\"Doctor\",\"Patient\",\"Doctor\",\"Patient\"]\n\n"
-            f"Transcript:\n{numbered}"
+        prompt = _DIARIZE_PROMPT.format(
+            context_block=_build_context_block(prior_labels),
+            segments_text=seg_lines,
         )
 
         client = _get_client()
         resp = client.chat.completions.create(
-            model=Config.GROQ_EXTRACT_MODEL,   # llama-3.1-8b-instant
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=len(text_segs) * 12 + 32,  # ~12 tokens per label
+            model=Config.GROQ_DIARIZE_MODEL,
+            messages=[
+                {"role": "system", "content": _DIARIZE_SYSTEM},
+                {"role": "user",   "content": prompt},
+            ],
+            max_tokens=len(text_segs) * 20 + 64,
             temperature=0,
         )
         content = (resp.choices[0].message.content or "").strip()
 
-        # Extract JSON array even if the model wraps it in prose
+        # Parse [{id, speaker}] — robust to leading/trailing prose
         match = re.search(r'\[.*?\]', content, re.DOTALL)
         if not match:
-            print(f"[Diarize/Groq] Could not parse label array from: {content[:120]}")
+            print(f"[Diarize/Groq] No JSON array in response: {content[:120]}")
             return segments
 
-        labels: List[str] = json.loads(match.group())
+        raw: List[Dict] = json.loads(match.group())
+        id_to_speaker: Dict[int, str] = {}
+        for item in raw:
+            sid = item.get("id")
+            spk = str(item.get("speaker") or "").strip()
+            if sid is not None:
+                id_to_speaker[int(sid)] = "Doctor" if "doctor" in spk.lower() else "Patient"
 
-        # Map labels back to original segment list (skip empty ones)
-        result = []
+        # Map back to original segment list (preserving empty/non-text segments)
+        result   = []
         label_idx = 0
         for seg in segments:
             if (seg.get("text") or "").strip():
-                raw_label = labels[label_idx] if label_idx < len(labels) else "Doctor"
-                speaker   = "Doctor" if "doctor" in raw_label.lower() else "Patient"
-                result.append({**seg, "speaker": speaker})
                 label_idx += 1
+                speaker = id_to_speaker.get(label_idx, "Doctor")
+                result.append({**seg, "speaker": speaker})
             else:
                 result.append(seg)
 
+        print(f"[Diarize/Groq] {len(result)} segs labeled with {Config.GROQ_DIARIZE_MODEL}")
         return result
 
     except Exception as e:
         print(f"[Diarize/Groq] Error: {e}")
-        return segments   # return unchanged on any failure
+        return segments
 
 
 def get_pipeline():

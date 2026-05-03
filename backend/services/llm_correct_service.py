@@ -16,35 +16,47 @@ import json
 import re
 from typing import List, Dict, Any, Optional
 
-MAX_SEGS = 30   # sliding window cap — keeps token count stable
+MAX_SEGS = 50   # 70B model handles larger windows comfortably
 
-_SYSTEM = "You are a medical conversation analyst. Reply with only a JSON array."
+_SYSTEM = (
+    "You are a clinical transcription analyst specialising in doctor-patient conversations. "
+    "Reply with only a valid JSON array."
+)
 
 _PROMPT = """\
 A doctor is consulting a patient. The transcript segments below have auto-assigned \
-speaker labels that may be wrong.
+speaker labels that may be wrong. Correct every label.
 
 {context_block}
 
-DOCTOR traits  : uses clinical/medical terms, asks diagnostic questions, gives \
-prescriptions or medical instructions, interprets test results.
-PATIENT traits : describes symptoms, answers questions, expresses pain or concerns, \
-uses everyday language.
+DOCTOR speaks like:
+  • Clinical terms: diagnosis, prescription, dosage, CBC, ECG, referral
+  • Directed questions: "How long?", "Any allergies?", "Where is the pain?"
+  • Instructions: "Take twice daily", "Avoid...", "Come back in a week"
+  • Interpreting results: "Your BP is...", "The scan shows...", "Blood work is normal"
+  • Usually leads the conversation and speaks first
 
-Correct the speaker label for EVERY segment listed below.
+PATIENT speaks like:
+  • Symptoms: "I've been feeling...", "It started...", "The pain is here"
+  • Short answers: "Yes doctor", "About 3 days", "No I haven't"
+  • Concerns: "Will it get better?", "Is it serious?"
+  • Personal: "I had this before", "My mother also had..."
+
+Override the existing label only when the text clearly contradicts it. \
+When in doubt, keep the established context.
+
 Reply with ONLY a JSON array — no explanation, no markdown:
-
 [{{"id": <number>, "speaker": "Doctor" | "Patient"}}, ...]
 
 Segments:
 {segments_text}"""
 
 _CTX_KNOWN = (
-    "ESTABLISHED CONTEXT: {doctor_label} = Doctor, {patient_label} = Patient. "
-    "Use this to resolve ambiguity; override only when evidence is strong."
+    "ESTABLISHED CONTEXT: {doctor_label} maps to Doctor, {patient_label} maps to Patient. "
+    "Maintain this mapping; override only when transcript evidence is conclusive."
 )
 _CTX_COLD = (
-    "CONTEXT: First pass — infer Doctor vs Patient purely from what is said."
+    "CONTEXT: First pass — infer Doctor vs Patient purely from clinical language and turn-taking."
 )
 
 
@@ -153,7 +165,7 @@ def correct_speakers(
 
         client = Groq(api_key=Config.GROQ_API_KEY)
         resp = client.chat.completions.create(
-            model=Config.GROQ_EXTRACT_MODEL,   # llama-3.1-8b-instant
+            model=Config.GROQ_DIARIZE_MODEL,   # llama-3.3-70b-versatile
             messages=[
                 {"role": "system", "content": _SYSTEM},
                 {"role": "user",   "content": prompt},

@@ -47,7 +47,9 @@ class Config:
     # ------------------------------------------------------------------ #
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "").strip()
     GROQ_TRANSCRIBE_MODEL: str = "whisper-large-v3"
-    GROQ_EXTRACT_MODEL: str = os.getenv("GROQ_EXTRACT_MODEL", "llama-3.1-8b-instant").strip()
+    GROQ_EXTRACT_MODEL: str  = os.getenv("GROQ_EXTRACT_MODEL",  "llama-3.1-8b-instant").strip()
+    # Larger model for speaker diarization — reasoning-heavy task, accuracy matters more than speed.
+    GROQ_DIARIZE_MODEL: str  = os.getenv("GROQ_DIARIZE_MODEL",  "llama-3.3-70b-versatile").strip()
 
     # Speech-to-text provider: "groq" (default) or "openai" (Whisper API — e.g. for demos)
     TRANSCRIBE_PROVIDER: str = (
