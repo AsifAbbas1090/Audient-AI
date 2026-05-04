@@ -92,7 +92,8 @@ def handle_disconnect():
     print(f"[WS] disconnect sid={sid[:8]}")
 
 
-# Module-level dict: { sid: { user_id, role } }
+# Vestigial: user_id/role stored on connect but never read.
+# Kept to avoid breaking the connect/disconnect handler pair.
 _socket_meta: dict = {}
 
 # Rolling transcript context per session — stored as speaker-labeled lines so Whisper
@@ -102,6 +103,28 @@ _session_context: dict = {}  # session_id → str (≤ whisper_service.WHISPER_R
 # Cross-call diarization memory — confirmed example lines per speaker per session.
 # Passed into diarize_with_groq to keep labels consistent across the 15s polling window.
 _session_diarize_labels: dict = {}  # session_id → {"doctor": [str], "patient": [str]}
+
+# Chunk buffer for first-3-chunk LLM bootstrap per session.
+# Holds segments from chunk 1 until chunk 2 arrives, then fires the first
+# llm_correct call with double the context for a more accurate role decision.
+_session_chunk_buffer: dict = {}  # session_id → {"segments": [...], "count": int}
+
+# Anchor segment pool per session — confirmed segments from bootstrap
+# and high-confidence corrections, used as context in future LLM calls.
+# Capped at 30 segments to avoid token bloat.
+_session_anchor_pool: dict = {}  # session_id → list of confirmed segments
+
+
+def get_anchor_pool(session_id: str) -> list:
+    """Return confirmed anchor segments for a session."""
+    return _session_anchor_pool.get(session_id, [])
+
+
+def append_anchor_pool(session_id: str, new_confirmed: list) -> None:
+    """Append new confirmed segments to the anchor pool, capped at 30."""
+    pool = _session_anchor_pool.get(session_id, [])
+    pool = (pool + new_confirmed)[-30:]   # keep most recent 30
+    _session_anchor_pool[session_id] = pool
 
 
 def _update_diarize_labels(session_id: str, labeled: list) -> None:
@@ -191,6 +214,7 @@ def handle_audio_chunk(data):
             task=task,
             language_hint=lang_hint,
             context=prior_context or None,
+            session_id=session_id or None,
         )
         segments = result.get("segments", [])
         language = result.get("language", "Unknown")
@@ -211,12 +235,25 @@ def handle_audio_chunk(data):
                 -whisper_service.WHISPER_ROLLING_CONTEXT_MAX:
             ]
 
-        # ── Dual-mic: override speaker label when forced_speaker is set ──
-        # The patient mic sends chunks tagged with forced_speaker="Patient"
-        # so we skip diarization and assign the label directly.
+        # ── Dual-mic: apply forced speaker label with heuristic bleed check ──
+        # The patient mic sends chunks tagged with forced_speaker="Patient".
+        # Heuristic override catches acoustic bleed from the other speaker
+        # and corrects the label before it reaches the UI.
         if forced_speaker:
+            from services.llm_correct_service import _heuristic_role
             for seg in segments:
-                seg["speaker"] = forced_speaker
+                text = str(seg.get("text", "")).strip()
+                heuristic = _heuristic_role(text)
+                # If heuristic strongly disagrees with the forced label,
+                # this segment is likely acoustic bleed from the other speaker.
+                # Mark it with the heuristic role instead of the forced one.
+                if heuristic and heuristic != forced_speaker:
+                    seg["speaker"] = heuristic
+                    seg["bleed_detected"] = True
+                    print(f"[WS/chunk] Bleed detected — forced={forced_speaker} "
+                          f"heuristic={heuristic} text={text[:60]}")
+                else:
+                    seg["speaker"] = forced_speaker
 
         # ── Audio accumulation for pyannote (if HF_TOKEN configured) ────
         # Runs in a daemon thread so FFmpeg conversion never blocks the WebSocket
@@ -232,6 +269,70 @@ def handle_audio_chunk(data):
                 daemon=True,
             ).start()
 
+        # ── First-3-chunk LLM bootstrap ──────────────────────────────────
+        # Buffer the first three chunks (~12s) so the model sees at least one
+        # full exchange before role labels. After that, llm_correct is driven
+        # by the frontend 25s polling as before.
+        if session_id:
+            buf = _session_chunk_buffer.setdefault(
+                session_id, {"segments": [], "count": 0}
+            )
+            buf["count"] += 1
+
+            if buf["count"] in (1, 2):
+                buf["segments"] = buf["segments"] + list(segments)
+
+            elif buf["count"] == 3:
+                # Combine first three chunks and fire the bootstrap LLM call
+                combined = buf["segments"] + list(segments)
+                buf["segments"] = []  # clear buffer
+                import threading
+                from services import llm_correct_service
+
+                def _bootstrap_llm(sid, segs, sock_id):
+                    # Assign stable numeric ids if not present
+                    for i, s in enumerate(segs):
+                        if "id" not in s:
+                            s["id"] = i + 1
+                    from services.audio_service import get_session_specialty
+                    session_specialty = get_session_specialty(sid)
+                    result = llm_correct_service.correct_speakers(
+                        segs,
+                        context=None,
+                        specialty=session_specialty,
+                        language=language,
+                        session_id=sid,
+                    )
+                    confirmed = result.get("confirmed_segments", [])
+                    if confirmed:
+                        _session_anchor_pool[sid] = confirmed[:30]
+                    if "corrections" in result:
+                        # Emit role-confirmed update back to this client only
+                        from extensions import socketio as _sio
+                        _sio.emit(
+                            "transcript_role_confirmed",
+                            {
+                                "corrections": result["corrections"],
+                                "context": result.get("context", {}),
+                                "bootstrap": True,
+                            },
+                            room=sock_id,
+                        )
+                        # Seed the diarize labels for this session from bootstrap
+                        ctx = result.get("context", {})
+                        if ctx.get("doctor_label") or ctx.get("patient_label"):
+                            _session_diarize_labels[sid] = {
+                                "doctor": [ctx.get("doctor_label", "")],
+                                "patient": [ctx.get("patient_label", "")],
+                            }
+
+                threading.Thread(
+                    target=_bootstrap_llm,
+                    args=(session_id, combined, request.sid),
+                    daemon=True,
+                ).start()
+        # ── END first-3-chunk bootstrap ───────────────────────────────────
+
         # ── Push transcript back to this client ──────────────────────────
         emit("transcript_update", {
             "segments": segments,
@@ -243,6 +344,8 @@ def handle_audio_chunk(data):
         if is_final and session_id:
             _session_context.pop(session_id, None)
             _session_diarize_labels.pop(session_id, None)
+            _session_chunk_buffer.pop(session_id, None)
+            _session_anchor_pool.pop(session_id, None)
 
     except Exception as exc:
         print(f"[WS/chunk] error: {exc}")
@@ -302,7 +405,7 @@ def handle_request_diarize(data):
                         print(f"[WS/diarize] pyannote failed: {e} — falling back to Groq LLM")
 
         # ── Path 2: Groq LLM text-based (70B with cross-call memory) ────
-        if Config.GROQ_API_KEY and len(segments) >= 2:
+        if Config.GROQ_API_KEYS_LIST and len(segments) >= 2:
             from services.diarize_service import (
                 diarize_with_groq,
                 expand_segments_for_diarization,
@@ -312,7 +415,9 @@ def handle_request_diarize(data):
             # matches client segment indices (fixes mis-aligned Doctor/Patient labels).
             expanded, group_sizes = expand_segments_for_diarization(segments)
             prior_ctx = _session_diarize_labels.get(session_id)
-            labeled_expanded = diarize_with_groq(expanded, prior_labels=prior_ctx)
+            labeled_expanded = diarize_with_groq(
+                expanded, prior_labels=prior_ctx, session_id=session_id
+            )
             _update_diarize_labels(session_id, labeled_expanded)
             labeled = collapse_labeled_segments(segments, labeled_expanded, group_sizes)
             emit("diarize_update", {"segments": labeled, "method": "groq_llm"})

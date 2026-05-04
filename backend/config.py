@@ -6,6 +6,25 @@ import os
 import shutil
 
 
+def _merge_groq_api_keys() -> list[str]:
+    """Comma-separated GROQ_API_KEYS plus legacy GROQ_API_KEY (deduped, legacy first if new)."""
+    raw = os.getenv("GROQ_API_KEYS", "").strip()
+    keys: list[str] = []
+    for part in raw.split(","):
+        k = part.strip()
+        if k and k not in keys:
+            keys.append(k)
+    legacy = os.getenv("GROQ_API_KEY", "").strip()
+    if legacy and legacy not in keys:
+        keys.insert(0, legacy)
+    elif not keys and legacy:
+        keys = [legacy]
+    return keys
+
+
+_GROQ_KEYS_MERGED = _merge_groq_api_keys()
+
+
 class Config:
     # ------------------------------------------------------------------ #
     # Database (Supabase PostgreSQL)                                       #
@@ -49,9 +68,18 @@ class Config:
     # ------------------------------------------------------------------ #
     # Groq API (transcription + extraction — online, free tier)           #
     # ------------------------------------------------------------------ #
-    GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "").strip()
-    GROQ_TRANSCRIBE_MODEL: str = "whisper-large-v3"
-    GROQ_EXTRACT_MODEL: str  = os.getenv("GROQ_EXTRACT_MODEL",  "llama-3.1-8b-instant").strip()
+    # GROQ_API_KEYS: comma-separated list; merged with GROQ_API_KEY if present.
+    GROQ_API_KEYS_LIST: list[str] = list(_GROQ_KEYS_MERGED)
+    GROQ_API_KEY: str = GROQ_API_KEYS_LIST[0] if GROQ_API_KEYS_LIST else os.getenv(
+        "GROQ_API_KEY", ""
+    ).strip()
+    GROQ_TRANSCRIBE_MODEL: str = (
+        os.getenv("GROQ_TRANSCRIBE_MODEL", "whisper-large-v3").strip() or "whisper-large-v3"
+    )
+    GROQ_EXTRACT_MODEL: str = (
+        os.getenv("GROQ_EXTRACT_MODEL", "llama-3.1-8b-instant").strip()
+        or "llama-3.1-8b-instant"
+    )
     # Larger model for speaker diarization — reasoning-heavy task, accuracy matters more than speed.
     GROQ_DIARIZE_MODEL: str  = os.getenv("GROQ_DIARIZE_MODEL",  "llama-3.3-70b-versatile").strip()
     # Backoff for 429 / 5xx from Groq (multi-session bursts hit per-minute caps quickly).

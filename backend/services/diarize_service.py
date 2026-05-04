@@ -9,19 +9,8 @@ import re
 import threading
 from typing import List, Dict, Any, Optional
 
-_groq_client = None
-
 _pyannote_ready_event = threading.Event()
 _pyannote_load_lock = threading.Lock()
-
-
-def _get_client():
-    global _groq_client
-    if _groq_client is None:
-        from config import Config
-        from groq import Groq
-        _groq_client = Groq(api_key=Config.GROQ_API_KEY)
-    return _groq_client
 
 
 def expand_segments_for_diarization(
@@ -168,6 +157,7 @@ def _build_context_block(prior_labels: Optional[Dict]) -> str:
 def diarize_with_groq(
     segments: List[Dict[str, Any]],
     prior_labels: Optional[Dict] = None,
+    session_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Use Groq LLM (70B) to assign Doctor/Patient speaker labels from transcript text.
@@ -182,7 +172,7 @@ def diarize_with_groq(
     """
     from config import Config
 
-    if not Config.GROQ_API_KEY:
+    if not Config.GROQ_API_KEYS_LIST:
         return segments
 
     text_segs = [s for s in segments if (s.get("text") or "").strip()]
@@ -202,11 +192,11 @@ def diarize_with_groq(
             segments_text=seg_lines,
         )
 
-        from services.groq_retry import groq_call_with_retry
+        from services.groq_retry import groq_call_with_key_rotation
 
-        client = _get_client()
-        resp = groq_call_with_retry(
-            lambda: client.chat.completions.create(
+        resp = groq_call_with_key_rotation(
+            session_id,
+            lambda client: client.chat.completions.create(
                 model=Config.GROQ_DIARIZE_MODEL,
                 messages=[
                     {"role": "system", "content": _DIARIZE_SYSTEM},
@@ -214,7 +204,7 @@ def diarize_with_groq(
                 ],
                 max_tokens=len(text_segs) * 20 + 64,
                 temperature=0,
-            )
+            ),
         )
         content = (resp.choices[0].message.content or "").strip()
 

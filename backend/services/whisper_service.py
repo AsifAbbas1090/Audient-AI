@@ -10,6 +10,56 @@ import re
 import unicodedata
 from typing import Any, Dict, List, Optional
 
+# Known Whisper hallucination patterns — generated on near-silent audio.
+# These are never real medical content and must be dropped before any
+# downstream step sees them.
+import re as _re
+
+_HALLUCINATION_PATTERNS = [
+    # Video/YouTube artifacts
+    r"thank you for (watching|taking the time|joining|tuning in|your time)",
+    r"please (subscribe|like and subscribe|hit the bell|leave a comment)",
+    r"watch(ing)? this video",
+    r"for more information (visit|go to|check)",
+    r"please see the (complete )?disclaimer",
+    r"subtitles? (by|from|downloaded|provided)",
+    r"transcript(ion)? (by|from|provided)",
+    r"copyright \d{4}",
+    r"all rights reserved",
+
+    # URL patterns — any domain
+    r"https?://",
+    r"www\.[a-z0-9\-]+\.",
+    r"\.(com|org|net|pk|co|gov|io|edu|uk|au)\b",
+    r"sites\.google\.com",
+
+    # Whisper keyword hallucinations — lists of clinical terms with no sentence structure
+    # Whisper generates these on near-silent clinical audio
+    r"^[\w\s\-]+,[\w\s\-]+,[\w\s\-]+,[\w\s\-]+,",   # 4+ comma-separated items = keyword list
+    r"(symptoms|diagnosis|prescription|treatment|follow.?up|referral)"
+    r".{0,20}(symptoms|diagnosis|prescription|treatment|follow.?up|referral)",  # repeated clinical keywords
+
+    # Filler-only segments
+    r"^\s*(uh+|um+|hmm+|ah+|oh+)\s*$",
+    r"^\s*(okay|ok|yes|no|yeah|yep|nope|hmm|mhm)\s*$",
+
+    # Too short or no real words
+    r"^[^a-zA-Z\u0600-\u06FF]{0,5}$",
+    r"^\s*\.\s*$",
+    r"^\s*$",
+]
+
+
+def is_hallucination(text: str) -> bool:
+    t = text.strip().lower()
+    if len(t) < 6:
+        return True
+    for pattern in _HALLUCINATION_PATTERNS:
+        if _re.search(pattern, t, _re.IGNORECASE):
+            return True
+    return False
+
+
 # Groq Whisper API hard cap (invalid_request_error if exceeded).
 GROQ_WHISPER_PROMPT_CHAR_LIMIT = 896
 # Target max before optional word-boundary trim; stay under API limit.
@@ -46,17 +96,7 @@ def _clamp_prompt_final(text: str, hard_limit: int) -> str:
     return text[-hard_limit:]
 
 
-_groq_client = None
 _openai_stt_client = None
-
-
-def _get_groq_client():
-    global _groq_client
-    if _groq_client is None:
-        from config import Config
-        from groq import Groq
-        _groq_client = Groq(api_key=Config.GROQ_API_KEY)
-    return _groq_client
 
 
 def _get_openai_stt_client():
@@ -228,11 +268,11 @@ def _transcribe_groq(
     task: str,
     language_hint: Optional[str],
     context: Optional[str],
+    session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     from config import Config
     from services.correction_service import correct_text
 
-    client = _get_groq_client()
     with open(audio_path, "rb") as f:
         audio_bytes = f.read()
     filename = os.path.basename(audio_path)
@@ -255,18 +295,20 @@ def _transcribe_groq(
     if task == "transcribe" and lang_for_api:
         common_kwargs["language"] = lang_for_api
 
-    from services.groq_retry import groq_call_with_retry
+    from groq import Groq
+    from services.groq_retry import groq_call_with_key_rotation
+
+    def _call(client: Groq):
+        if task == "translate":
+            # Never pass `language` here — clients sometimes echo old labels back into transcribe calls.
+            return client.audio.translations.create(**_groq_translation_kwargs(common_kwargs))
+        return client.audio.transcriptions.create(**common_kwargs)
+
+    response = groq_call_with_key_rotation(session_id, _call)
 
     if task == "translate":
-        # Never pass `language` here — clients sometimes echo old labels back into transcribe calls.
-        response = groq_call_with_retry(
-            lambda: client.audio.translations.create(**_groq_translation_kwargs(common_kwargs))
-        )
         language = "English"
     else:
-        response = groq_call_with_retry(
-            lambda: client.audio.transcriptions.create(**common_kwargs)
-        )
         language = (
             getattr(response, "language", None)
             or normalized_language
@@ -354,6 +396,7 @@ def transcribe(
     task: str = "translate",
     language_hint: Optional[str] = None,
     context: Optional[str] = None,
+    session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Transcribe audio using the configured cloud Whisper provider (Groq or OpenAI).
@@ -371,11 +414,16 @@ def transcribe(
             raise RuntimeError(
                 "OPENAI_API_KEY not set. Add it to .env or set TRANSCRIBE_PROVIDER=groq"
             )
-        return _transcribe_openai(audio_path, task, language_hint, context)
+        result = _transcribe_openai(audio_path, task, language_hint, context)
+    else:
+        if not Config.GROQ_API_KEYS_LIST:
+            raise RuntimeError(
+                "No Groq API keys configured. Set GROQ_API_KEYS or GROQ_API_KEY in .env, "
+                "or set TRANSCRIBE_PROVIDER=openai with OPENAI_API_KEY"
+            )
+        result = _transcribe_groq(audio_path, task, language_hint, context, session_id=session_id)
 
-    if not Config.GROQ_API_KEY:
-        raise RuntimeError(
-            "GROQ_API_KEY not set. Get a free key at https://console.groq.com "
-            "or set TRANSCRIBE_PROVIDER=openai with OPENAI_API_KEY"
-        )
-    return _transcribe_groq(audio_path, task, language_hint, context)
+    segments = result.get("segments", [])
+    segments = [s for s in segments if not is_hallucination(s.get("text", ""))]
+    result["segments"] = segments
+    return result

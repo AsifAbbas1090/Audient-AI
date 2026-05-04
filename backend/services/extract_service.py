@@ -46,15 +46,16 @@ def _parse_json(content: str) -> Dict[str, Any]:
     return json.loads(content)
 
 
-def _extract_groq(text: str, specialty_context: str) -> Dict[str, Any]:
+def _extract_groq(
+    text: str, specialty_context: str, session_id: str | None = None
+) -> Dict[str, Any]:
     """Extract using Groq LLM API."""
     from config import Config
-    from groq import Groq
-    from services.groq_retry import groq_call_with_retry
+    from services.groq_retry import groq_call_with_key_rotation
 
-    client = Groq(api_key=Config.GROQ_API_KEY)
-    completion = groq_call_with_retry(
-        lambda: client.chat.completions.create(
+    completion = groq_call_with_key_rotation(
+        session_id,
+        lambda client: client.chat.completions.create(
             model=Config.GROQ_EXTRACT_MODEL,
             messages=[
                 {"role": "system", "content": SYSTEM_MSG},
@@ -65,7 +66,7 @@ def _extract_groq(text: str, specialty_context: str) -> Dict[str, Any]:
             ],
             max_tokens=512,
             temperature=0,
-        )
+        ),
     )
     content = (completion.choices[0].message.content or "{}").strip()
     return _parse_json(content)
@@ -121,22 +122,20 @@ def generate_followups(text: str, extracted: Dict[str, Any], specialty: str | No
     from config import Config
     from services.specialty_service import specialty_prompt_block
 
-    if not Config.GROQ_API_KEY or not text.strip():
+    if not Config.GROQ_API_KEYS_LIST or not text.strip():
         return []
 
     import re
 
     try:
-        from groq import Groq
+        from services.groq_retry import groq_call_with_key_rotation
 
-        from services.groq_retry import groq_call_with_retry
-
-        client = Groq(api_key=Config.GROQ_API_KEY)
         extracted_clean = {k: v for k, v in extracted.items() if v and v != "null"}
         extracted_str   = json.dumps(extracted_clean, indent=2)
 
-        resp = groq_call_with_retry(
-            lambda: client.chat.completions.create(
+        resp = groq_call_with_key_rotation(
+            None,
+            lambda client: client.chat.completions.create(
                 model=Config.GROQ_EXTRACT_MODEL,
                 messages=[{
                     "role": "user",
@@ -148,7 +147,7 @@ def generate_followups(text: str, extracted: Dict[str, Any], specialty: str | No
                 }],
                 max_tokens=400,
                 temperature=0,
-            )
+            ),
         )
         content = (resp.choices[0].message.content or "").strip()
         match   = re.search(r'\[.*?\]', content, re.DOTALL)
@@ -159,7 +158,9 @@ def generate_followups(text: str, extracted: Dict[str, Any], specialty: str | No
     return []
 
 
-def extract(text: str, specialty: str | None = None) -> Dict[str, Any]:
+def extract(
+    text: str, specialty: str | None = None, session_id: str | None = None
+) -> Dict[str, Any]:
     """
     Extract structured medical fields from transcript text.
     Uses Groq if GROQ_API_KEY is set, else falls back to Ollama.
@@ -171,9 +172,11 @@ def extract(text: str, specialty: str | None = None) -> Dict[str, Any]:
     specialty_context = specialty_prompt_block(specialty)
 
     # ── Try Groq first ───────────────────────────────────────────
-    if Config.GROQ_API_KEY:
+    if Config.GROQ_API_KEYS_LIST:
         try:
-            return _extract_groq(text, specialty_context=specialty_context)
+            return _extract_groq(
+                text, specialty_context=specialty_context, session_id=session_id
+            )
         except json.JSONDecodeError as e:
             print(f"[Extract/Groq] JSON parse error: {e}")
             return {"error": "Model did not return valid JSON"}

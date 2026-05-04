@@ -161,9 +161,13 @@ def process_session_task(
         with ThreadPoolExecutor(max_workers=2, thread_name_prefix="p1") as pool:
             diar_fut = (
                 None if skip_diar
-                else pool.submit(diarize_with_groq, expanded)
+                else pool.submit(
+                    diarize_with_groq, expanded, None, str(conv_id)
+                )
             )
-            extr_fut = pool.submit(extract, text, specialty) if text else None
+            extr_fut = (
+                pool.submit(extract, text, specialty, str(conv_id)) if text else None
+            )
 
             labeled_expanded = None
             if diar_fut:

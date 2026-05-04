@@ -25,10 +25,24 @@ _TARGET_SR = 16_000
 
 # ── Session management ───────────────────────────────────────────────────────
 
-def create_session(session_id: str) -> str:
+def create_session(session_id: str, specialty: str = "general_mbbs") -> str:
+    from services.groq_key_pool import assign_key_index_for_new_session
+
     wav_path = os.path.join(Config.SESSIONS_DIR, f"{session_id}.wav")
-    _sessions[session_id] = {"wav_path": wav_path}
+    _sessions[session_id] = {
+        "wav_path": wav_path,
+        "specialty": specialty,
+        "groq_key_index": assign_key_index_for_new_session(),
+    }
     return wav_path
+
+
+def get_session_specialty(session_id: str) -> str:
+    """Return the doctor specialty stored at session start, or general_mbbs."""
+    session = _sessions.get(session_id)
+    if not session:
+        return "general_mbbs"
+    return session.get("specialty", "general_mbbs")
 
 
 def get_session(session_id: str) -> Optional[dict]:

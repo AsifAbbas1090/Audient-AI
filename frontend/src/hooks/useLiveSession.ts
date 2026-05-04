@@ -53,8 +53,12 @@ export type LiveFields = {
   [key: string]:    unknown
 }
 
-/** Correction emitted by the LLM speaker-correction checkpoint. */
-export type LlmCorrection = { id: number; speaker: 'Doctor' | 'Patient' }
+/** Correction emitted by the LLM speaker-correction checkpoint (HTTP or WS bootstrap). */
+export type LlmCorrection = {
+  id:             number
+  speaker:        'Doctor' | 'Patient'
+  text_proofread?: string
+}
 
 /** Which raw diarization label maps to which clinical role (built up over successive passes). */
 type SpeakerContext = { doctor_label: string | null; patient_label: string | null }
@@ -69,7 +73,6 @@ type RawSegment = {
 // ── Constants ─────────────────────────────────────────────────────────────────
 const CHUNK_MS         = 4_000   // send interval: assemble + ship a window blob every 4s
 const WINDOW_SUBS      = 10      // 10 × 500ms = 5s audio per Whisper request (1s overlap with prior send)
-const DIARIZE_MS       = 15_000  // diarize interval
 const EXTRACT_MS       = 60_000  // incremental extraction interval
 const LLM_CORRECT_MS   = 25_000  // LLM speaker-correction interval
 const LLM_CORRECT_WINDOW = 30    // sliding window: max segments sent per LLM call
@@ -105,6 +108,13 @@ export function useLiveSession(opts: {
   patientDeviceId?:    string   // optional: enables dual-channel patient mic
   contextSeed?:        string   // optional: last ~500 chars of parent transcript for continuation sessions
 }) {
+  // Read doctor specialty from cached auth profile.
+  // Populated by usePreferencesUser (Sidebar) via GET /api/users/me/preferences.
+  // Falls back to 'general_mbbs' if not set.
+  const _authRaw = localStorage.getItem('auth')
+  const _authUser = _authRaw ? (() => { try { return JSON.parse(_authRaw) as { specialty?: string } } catch { return null } })() : null
+  const specialtyRef = useRef<string>(_authUser?.specialty ?? 'general_mbbs')
+
   const [connected,  setConnected]  = useState(false)
   const [sessionId,  setSessionId]  = useState<string | null>(null)
   const [active,     setActive]     = useState(false)
@@ -118,7 +128,6 @@ export function useLiveSession(opts: {
 
   const chunkIntervalRef      = useRef<ReturnType<typeof setInterval> | null>(null)
   const patientIntervalRef    = useRef<ReturnType<typeof setInterval> | null>(null)
-  const diarizeIntervalRef    = useRef<ReturnType<typeof setInterval> | null>(null)
   const extractIntervalRef    = useRef<ReturnType<typeof setInterval> | null>(null)
   const llmCorrectIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const segmentsRef           = useRef<Segment[]>([])
@@ -171,10 +180,34 @@ export function useLiveSession(opts: {
           end:     (s.end   ?? 0) + timeOffsetRef.current,
         }))
 
-      if (newSegs.length) {
-        const maxEnd = newSegs.reduce((m, s) => Math.max(m, s.end ?? 0), 0)
+      // Remove segments whose text already exists in recent state.
+      // Whisper re-transcribes the ~1s overlap between consecutive audio
+      // windows, producing identical or near-identical trailing segments.
+      // We drop any incoming segment whose normalized text matches the
+      // last 5 segments or overlaps (suffix/prefix) with them.
+      const recentTexts = segmentsRef.current
+        .slice(-5)   // check last 5, not 3
+        .map(s => s.text.trim().toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' '))
+
+      const deduped = newSegs.filter(s => {
+        const norm = s.text.trim().toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ')
+        if (norm.length < 6) return false   // drop very short segments entirely
+        return !recentTexts.some(r => {
+          if (!r || r.length < 6) return false
+          if (r === norm) return true                          // exact match
+          if (r.includes(norm) || norm.includes(r)) return true  // substring
+          // Overlap: tail of recent matches head of new (Whisper overlap artifact)
+          const overlapLen = Math.min(20, Math.floor(norm.length * 0.6))
+          const tail = r.slice(-overlapLen)
+          const head = norm.slice(0, overlapLen)
+          return tail.length > 8 && head.startsWith(tail.slice(-8))
+        })
+      })
+
+      if (deduped.length) {
+        const maxEnd = deduped.reduce((m, s) => Math.max(m, s.end ?? 0), 0)
         timeOffsetRef.current = Math.max(timeOffsetRef.current, maxEnd)
-        opts.onTranscriptUpdate(newSegs)
+        opts.onTranscriptUpdate(deduped)
       }
 
       if (data.language && data.language !== 'Unknown' && detectedLangRef.current === 'Unknown') {
@@ -182,6 +215,20 @@ export function useLiveSession(opts: {
         opts.onLanguage?.(data.language)
       }
     })
+
+    socket.on(
+      'transcript_role_confirmed',
+      (data: {
+        corrections: LlmCorrection[]
+        context:     SpeakerContext
+        bootstrap:   boolean
+      }) => {
+        if (data.context) speakerContextRef.current = data.context
+        if (data.corrections?.length) {
+          opts.onLlmCorrectUpdate?.(data.corrections)
+        }
+      },
+    )
 
     socket.on('diarize_update', (data: { segments: RawSegment[] }) => {
       if (data.segments?.length) opts.onDiarizeUpdate(data.segments)
@@ -240,7 +287,11 @@ export function useLiveSession(opts: {
       const res = await fetch(`${API_ROOT()}/api/extract`, {
         method: 'POST',
         headers,
-        body:   JSON.stringify({ text }),
+        body:   JSON.stringify({
+          text,
+          specialty: specialtyRef.current,
+          ...(sessionIdRef.current ? { session_id: sessionIdRef.current } : {}),
+        }),
       })
       if (!res.ok) return
       const data = await res.json() as Record<string, unknown>
@@ -276,6 +327,11 @@ export function useLiveSession(opts: {
           session_id: sessionIdRef.current,
           segments:   window,
           context:    speakerContextRef.current,
+          specialty:  specialtyRef.current,
+          language:
+            detectedLangRef.current !== 'Unknown'
+              ? detectedLangRef.current
+              : null,
         }),
       })
       if (!res.ok) return
@@ -313,34 +369,27 @@ export function useLiveSession(opts: {
       }, CHUNK_MS)
     }
 
-    // Diarization (doctor audio only)
-    diarizeIntervalRef.current = setInterval(() => {
-      requestDiarize(segmentsRef.current)
-    }, DIARIZE_MS)
-
     // Incremental field extraction
     extractIntervalRef.current = setInterval(runExtract, EXTRACT_MS)
 
-    // LLM speaker-correction checkpoint — starts after 15 s so the first pass
-    // has enough context to reliably distinguish Doctor from Patient.
-    // Subsequent passes run every LLM_CORRECT_MS (25 s) with rolling context.
+    // LLM speaker-correction checkpoint — short warm-up (5s) so the first
+    // polling pass aligns with the 3-chunk WS bootstrap (~12s); later passes
+    // every LLM_CORRECT_MS (25s) with rolling context.
     setTimeout(() => {
       if (llmCorrectIntervalRef.current !== null) return  // already cleared (session ended)
       requestLlmCorrect()  // immediate first run after warm-up
       llmCorrectIntervalRef.current = setInterval(requestLlmCorrect, LLM_CORRECT_MS)
-    }, 15_000)
-  }, [sendChunk, requestDiarize, runExtract, requestLlmCorrect, opts.patientDeviceId, doctorRec, patientRec])
+    }, 5_000)
+  }, [sendChunk, runExtract, requestLlmCorrect, opts.patientDeviceId, doctorRec, patientRec])
 
   // ── Helper: clear all polling intervals ───────────────────────────────────────
   const _clearIntervals = useCallback(() => {
     if (chunkIntervalRef.current)      clearInterval(chunkIntervalRef.current)
     if (patientIntervalRef.current)    clearInterval(patientIntervalRef.current)
-    if (diarizeIntervalRef.current)    clearInterval(diarizeIntervalRef.current)
     if (extractIntervalRef.current)    clearInterval(extractIntervalRef.current)
     if (llmCorrectIntervalRef.current) clearInterval(llmCorrectIntervalRef.current)
     chunkIntervalRef.current      = null
     patientIntervalRef.current    = null
-    diarizeIntervalRef.current    = null
     extractIntervalRef.current    = null
     llmCorrectIntervalRef.current = null
   }, [])
@@ -363,21 +412,7 @@ export function useLiveSession(opts: {
       const body: Record<string, string> = {}
       if (id) body.session_id = id
       if (opts.contextSeed) body.context_seed = opts.contextSeed
-      const res  = await fetch(`${API_ROOT()}/api/session/start`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-      })
-      const json = await res.json() as { session_id?: string }
-      id = json.session_id ?? id
-    } catch { /* session ID is optional — transcription works without it */ }
-    try {
-      const token   = localStorage.getItem('jwt_token')
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-      if (token) headers['Authorization'] = `Bearer ${token}`
-      const body: Record<string, string> = {}
-      if (id) body.session_id = id
-      if (opts.contextSeed) body.context_seed = opts.contextSeed
+      body.specialty = specialtyRef.current
       const res  = await fetch(`${API_ROOT()}/api/session/start`, {
         method: 'POST',
         headers,
@@ -448,8 +483,8 @@ export function useLiveSession(opts: {
 
   // ── Flush remaining audio when the doctor recorder stops ─────────────────────
   // Fires on pause AND on full stop. `active` distinguishes them:
-  //   active=true  → pause: send remaining audio, no final diarize/extract
-  //   active=false → stop:  send final audio, run diarize + extract
+  //   active=true  → pause: send remaining audio, no final extract
+  //   active=false → stop:  send final audio, run extract
   useEffect(() => {
     if (doctorRec.recording || !doctorRec.chunks.length) return
     const isFinalStop = !active
@@ -457,14 +492,13 @@ export function useLiveSession(opts: {
       const blob = doctorRec.getWindowBlob(WINDOW_SUBS)
       if (blob && blob.size >= 500) await sendChunk(blob, isFinalStop)
       if (isFinalStop) {
-        requestDiarize(segmentsRef.current)
         await runExtract()
       }
     }
     finish()
   }, [doctorRec.recording, doctorRec.chunks, active])  // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Keep segmentsRef in sync for diarize / extract calls
+  // Keep segmentsRef in sync for extract / llm_correct calls
   const setSegmentsRef = useCallback((segs: Segment[]) => {
     segmentsRef.current = segs
   }, [])

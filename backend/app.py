@@ -164,12 +164,20 @@ def create_app() -> Flask:
         ).start()
 
     # ── Startup diagnostics ─────────────────────────────────────────────────
-    groq_ready  = bool(Config.GROQ_API_KEY)
+    groq_ready  = bool(Config.GROQ_API_KEYS_LIST)
     diar_ready  = bool(Config.HF_TOKEN)
     db_ready    = bool(Config.DATABASE_URL)
     redis_ready = bool(Config.REDIS_URL)
 
-    print(f"[Boot] Groq API        : {'OK configured' if groq_ready else '-- NOT set — add GROQ_API_KEY to .env'}")
+    n_groq = len(Config.GROQ_API_KEYS_LIST)
+    print(
+        f"[Boot] Groq API        : "
+        f"{'OK ' + str(n_groq) + ' key(s)' if groq_ready else '-- NOT set — add GROQ_API_KEYS or GROQ_API_KEY to .env'}"
+    )
+    if groq_ready:
+        for i, k in enumerate(Config.GROQ_API_KEYS_LIST):
+            fp = f"{k[:8]}…{k[-4:]}" if len(k) > 14 else "***"
+            print(f"[Boot]   Groq key slot {i + 1}/{n_groq} (fingerprint): {fp}")
     print(f"[Boot] Diarization     : {'OK pyannote pre-loading in background' if diar_ready else '~~ Groq LLM text-based (set HF_TOKEN for audio-based)'}")
     print(f"[Boot] Database        : {'OK configured' if db_ready else '-- NOT configured — set DATABASE_URL in .env'}")
     print(f"[Boot] WebSocket       : OK threading mode  ws://localhost:{Config.PORT}")

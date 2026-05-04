@@ -94,12 +94,11 @@ def generate_recommendations(
         RuntimeError if Groq is unavailable or returns invalid JSON.
     """
     from config import Config
-    from groq import Groq
     from services.specialty_service import specialty_prompt_block
-    from services.groq_retry import groq_call_with_retry
+    from services.groq_retry import groq_call_with_key_rotation
 
-    if not Config.GROQ_API_KEY:
-        raise RuntimeError("GROQ_API_KEY is not set — cannot generate recommendations.")
+    if not Config.GROQ_API_KEYS_LIST:
+        raise RuntimeError("GROQ API keys are not set — cannot generate recommendations.")
 
     prompt = PROMPT_TEMPLATE.format(
         patient_name    =_safe_str(summary.get("patient_name")),
@@ -112,9 +111,9 @@ def generate_recommendations(
         specialty_context=specialty_prompt_block(specialty),
     )
 
-    client = Groq(api_key=Config.GROQ_API_KEY)
-    completion = groq_call_with_retry(
-        lambda: client.chat.completions.create(
+    completion = groq_call_with_key_rotation(
+        None,
+        lambda client: client.chat.completions.create(
             model=Config.GROQ_EXTRACT_MODEL,   # llama-3.1-8b-instant
             messages=[
                 {"role": "system", "content": SYSTEM_MSG},
@@ -122,7 +121,7 @@ def generate_recommendations(
             ],
             max_tokens=1024,
             temperature=0.3,
-        )
+        ),
     )
 
     content = (completion.choices[0].message.content or "").strip()

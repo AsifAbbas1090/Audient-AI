@@ -18,5 +18,9 @@ def extract_info():
     if not data or not data.get("text"):
         return jsonify({"error": "Request body must include 'text' field"}), 400
 
-    result = extract_service.extract(data["text"])
+    specialty   = data.get("specialty") or None
+    session_id  = (data.get("session_id") or "").strip() or None
+    result = extract_service.extract(
+        data["text"], specialty=specialty, session_id=session_id
+    )
     return jsonify(result)

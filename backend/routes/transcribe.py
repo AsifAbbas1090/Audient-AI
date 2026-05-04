@@ -50,8 +50,8 @@ def transcribe_audio():
                     "or set TRANSCRIBE_PROVIDER=groq"
                 }
             ), 503
-    elif not Config.GROQ_API_KEY:
-        return jsonify({"error": "GROQ_API_KEY not set — add it to .env"}), 503
+    elif not Config.GROQ_API_KEYS_LIST:
+        return jsonify({"error": "GROQ_API_KEYS / GROQ_API_KEY not set — add to .env"}), 503
 
     # ── Save uploaded file ───────────────────────────────────────
     # Always use a UUID prefix so concurrent requests never share a path.
@@ -90,7 +90,10 @@ def transcribe_audio():
         # ── Transcribe via Groq ──────────────────────────────────
         task      = "translate" if translate else "transcribe"
         result    = whisper_service.transcribe(
-            input_path, task=task, language_hint=language_hint
+            input_path,
+            task=task,
+            language_hint=language_hint,
+            session_id=session_id or None,
         )
         segments  = result["segments"]
         language  = result.get("language", "Unknown")
@@ -105,8 +108,8 @@ def transcribe_audio():
         diarization_note = None
         if diarize and len(segments) >= 2:
             from services import diarize_service
-            if Config.GROQ_API_KEY:
-                segments = diarize_service.diarize_with_groq(segments)
+            if Config.GROQ_API_KEYS_LIST:
+                segments = diarize_service.diarize_with_groq(segments, session_id=session_id or None)
                 diarization_note = "Speaker labels assigned via Groq LLM."
             else:
                 diarization_note = "Set GROQ_API_KEY or HF_TOKEN to enable speaker labels."

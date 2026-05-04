@@ -29,7 +29,8 @@ def session_start():
 
     # Use a pre-created ID when continuing from an existing session, otherwise generate fresh
     session_id = (body.get("session_id") or "").strip() or str(uuid.uuid4())
-    audio_service.create_session(session_id)
+    specialty = (body.get("specialty") or "general_mbbs").strip()
+    audio_service.create_session(session_id, specialty=specialty)
 
     # Pre-seed the Whisper rolling context so the first chunk of a follow-up
     # session continues naturally from the end of the parent transcript.
@@ -56,7 +57,7 @@ def session_start():
             db.session.rollback()
             print(f"[session/start] Could not persist conversation: {e}")
 
-    return jsonify({"session_id": session_id})
+    return jsonify({"session_id": session_id, "specialty": specialty})
 
 
 @sessions_bp.route("/api/session/diarize", methods=["POST"])
@@ -113,9 +114,9 @@ def session_diarize():
                     print(f"[session/diarize/pyannote] error: {e} — falling back to Groq LLM")
 
     # ── Path 2: Groq LLM (online text-based) ────────────────────────────────
-    if Config.GROQ_API_KEY:
+    if Config.GROQ_API_KEYS_LIST:
         try:
-            result = diarize_service.diarize_with_groq(segments)
+            result = diarize_service.diarize_with_groq(segments, session_id=session_id or None)
             speaker_counts = {}
             for seg in result:
                 sp = seg.get("speaker", "Unknown")
@@ -182,8 +183,12 @@ def session_llm_correct():
     """
     data       = request.get_json() or {}
     session_id = (data.get("session_id") or "").strip()
+    from routes.socket_handlers import get_anchor_pool, append_anchor_pool
+    anchor_segments = get_anchor_pool(session_id)
     segments   = data.get("segments") or []
     context    = data.get("context") or None
+    specialty  = data.get("specialty") or None
+    language   = data.get("language") or None
 
     if not session_id:
         return jsonify({"error": "session_id required"}), 400
@@ -191,5 +196,29 @@ def session_llm_correct():
         return jsonify({"skipped": True, "reason": "No segments"}), 200
 
     from services import llm_correct_service
-    result = llm_correct_service.correct_speakers(segments, context)
+    result = llm_correct_service.correct_speakers(
+        segments,
+        context,
+        specialty=specialty,
+        language=language,
+        anchor_segments=anchor_segments,
+        new_only=True,
+        session_id=session_id,
+    )
+    if "confirmed_segments" in result:
+        append_anchor_pool(session_id, result["confirmed_segments"])
+
+    # On skip or error, build a passthrough so the client always gets
+    # something safe — original text, Unknown role — never a crash
+    if "error" in result or "skipped" in result:
+        passthrough = [
+            {
+                "id": s.get("id"),
+                "speaker": s.get("speaker", "Unknown"),
+                "text_proofread": str(s.get("text", "")).strip(),
+            }
+            for s in segments
+        ]
+        result["passthrough_segments"] = passthrough
+
     return jsonify(result), 200
