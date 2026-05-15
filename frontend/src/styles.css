@@ -192,11 +192,25 @@
 
   /* Shared app surfaces — `light:` cannot be used inside @apply; use html.light (see tailwind.config.js plugin for components) */
   .app-page {
-    @apply min-h-screen flex bg-surface-400;
+    display: flex;
+    height: 100dvh;
+    overflow: hidden;
+    @apply bg-surface-400;
   }
 
   html.light .app-page {
     @apply bg-slate-100;
+  }
+
+  .app-page > main {
+    @apply pb-16 md:pb-0;
+  }
+
+  /* Mobile bottom nav clearance — applied to all page main areas */
+  @media (max-width: 767px) {
+    .page-main-content {
+      padding-bottom: 5rem; /* 80px = bottom nav height */
+    }
   }
 
   .app-surface-elevated {
@@ -214,5 +228,36 @@
 
   html.light .app-input-native {
     @apply bg-white border-slate-200 text-slate-900 placeholder:text-slate-400;
+  }
+
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .min-touch {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
+@layer base {
+  /* Prevent iOS font inflation */
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  /* Prevent iOS input zoom (inputs must be >= 16px) */
+  input, select, textarea {
+    font-size: max(16px, 1rem);
+  }
+
+  /* Safe area for notched phones */
+  body {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  /* Smooth scrolling */
+  html {
+    scroll-behavior: smooth;
   }
 }

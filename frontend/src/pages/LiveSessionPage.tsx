@@ -20,6 +20,7 @@ import { useToast }      from '../components/ui/Toaster'
 import api from '../lib/api'
 import { inferDualMicDefaults, shouldAutoInferDualMic } from '../lib/audioDeviceHeuristics'
 import { writeDraft, readDraft, clearDraft, type SessionDraft } from '../lib/sessionDraft'
+import { cn } from '../utils/cn'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const POLL_MS = 2_000
@@ -90,13 +91,13 @@ function DeviceSelect({
   value: string; onChange: (id: string) => void; placeholder: string
 }) {
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex w-full flex-col gap-1.5 sm:w-auto sm:min-w-[12rem]">
       <label className="text-xs text-slate-400 flex items-center gap-1.5">{icon}{label}</label>
-      <div className="relative">
+      <div className="relative w-full sm:w-auto">
         <select
           value={value}
           onChange={e => onChange(e.target.value)}
-          className="device-select-native w-full appearance-none bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs text-slate-100 pr-7 focus:outline-none focus:border-brand-500/50 light:bg-white light:border-slate-200 light:text-slate-900"
+          className="device-select-native min-h-[48px] w-full appearance-none rounded-xl border border-white/10 bg-white/5 px-3 py-2 pr-7 text-base text-slate-100 focus:border-brand-500/50 focus:outline-none sm:text-xs light:bg-white light:border-slate-200 light:text-slate-900"
         >
           <option value="">{placeholder}</option>
           {devices.map(d => (
@@ -214,6 +215,8 @@ export default function LiveSessionPage() {
   const [thirdSpeakerLabel,    setThirdSpeakerLabel]    = useState('Other')
   const [showThirdColumn,      setShowThirdColumn]       = useState(false)
   const [noisyEnvironment,     setNoisyEnvironment]     = useState(false)
+  const [activeTab, setActiveTab] = useState<'clinician' | 'patient' | 'third'>('clinician')
+  const [vocalDrawerOpen, setVocalDrawerOpen] = useState(false)
 
   const timerRef    = useRef<ReturnType<typeof setInterval> | null>(null)
   const pollRef     = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -699,6 +702,10 @@ export default function LiveSessionPage() {
     }
   }, [segments.length])
 
+  useEffect(() => {
+    if (!showThirdColumn && activeTab === 'third') setActiveTab('clinician')
+  }, [showThirdColumn, activeTab])
+
   // ── Render ───────────────────────────────────────────────────────────────────
   return (
     <div className="app-page">
@@ -716,15 +723,84 @@ export default function LiveSessionPage() {
         </div>
       )}
 
-      {/* Always-on vocal prompts indicator (bottom-right dot) */}
-      <VocalPromptsIndicator
-        phase={vocalPhase}
-        lastCmd={vocalLastCmd}
-        lastHeard={vocalLastHeard}
-        supported={vocalSupported}
-      />
+      {/* Desktop: always-on vocal prompts indicator (bottom-right dot) */}
+      <div className="pointer-events-none hidden md:block">
+        <VocalPromptsIndicator
+          phase={vocalPhase}
+          lastCmd={vocalLastCmd}
+          lastHeard={vocalLastHeard}
+          supported={vocalSupported}
+        />
+      </div>
 
-      <main className="flex-1 overflow-hidden flex flex-col light:bg-slate-100">
+      {/* Mobile: FAB opens vocal prompts drawer (clears BottomNav at bottom-20) */}
+      {vocalSupported && (
+        <>
+          <button
+            type="button"
+            aria-label="Vocal prompts"
+            onClick={() => setVocalDrawerOpen(true)}
+            className="fixed bottom-20 right-4 z-[45] flex h-12 w-12 min-h-[48px] min-w-[48px] items-center justify-center rounded-full border border-brand-500/40 bg-brand-600 text-white shadow-lg md:hidden pointer-events-auto"
+          >
+            <Mic size={22} />
+          </button>
+          {vocalDrawerOpen && (
+            <div className="fixed inset-0 z-[48] md:hidden pointer-events-auto">
+              <button
+                type="button"
+                aria-label="Close vocal prompts"
+                className="absolute inset-0 bg-black/50"
+                onClick={() => setVocalDrawerOpen(false)}
+              />
+              <div className="absolute inset-x-0 bottom-0 max-h-[min(78vh,32rem)] overflow-y-auto rounded-t-2xl border border-white/10 border-b-0 bg-surface-200 shadow-2xl light:border-slate-200 light:bg-white pb-[max(1rem,env(safe-area-inset-bottom))]">
+                <div className="sticky top-0 flex items-center justify-between border-b border-white/8 bg-surface-200/95 px-4 py-3 backdrop-blur light:border-slate-200 light:bg-white/95">
+                  <div className="flex items-center gap-2">
+                    <Mic size={16} className="text-brand-400" />
+                    <h3 className="text-sm font-semibold text-white light:text-slate-900">Vocal Prompts</h3>
+                  </div>
+                  <button
+                    type="button"
+                    className="min-h-[44px] min-w-[44px] rounded-xl text-sm text-slate-400 hover:bg-white/10 light:hover:bg-slate-100"
+                    onClick={() => setVocalDrawerOpen(false)}
+                  >
+                    ✕
+                  </button>
+                </div>
+                <div className="p-4">
+                  <div className="flex items-center gap-2 mb-3">
+                    <span className={`h-2 w-2 rounded-full ${
+                      vocalPhase === 'listening' ? 'bg-brand-400 animate-pulse' :
+                      vocalPhase === 'success'   ? 'bg-emerald-400' :
+                      vocalPhase === 'error'     ? 'bg-red-400' :
+                                                   'bg-slate-500/70'
+                    }`} />
+                    <span className="text-xs text-slate-500">
+                      {vocalPhase === 'listening' ? 'Listening…' : vocalPhase === 'watching' ? 'Say "Audient" then a command' : ''}
+                    </span>
+                  </div>
+                  <ul className="space-y-2 text-sm text-slate-500">
+                    <li className="text-slate-400 font-medium pb-2 border-b border-white/6 text-base">Say &quot;Audient&quot; then…</li>
+                    {[
+                      ['start',            'Begin recording'],
+                      ['stop',             'End & process'],
+                      ['pause',            'Pause recording'],
+                      ['resume',           'Resume recording'],
+                      ['generate summary', 'Read live fields'],
+                    ].map(([cmd, desc]) => (
+                      <li key={cmd} className="flex justify-between gap-3 py-1">
+                        <span className="font-mono text-brand-400/90">{cmd}</span>
+                        <span className="text-right text-slate-400">{desc}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden light:bg-slate-100">
 
         {/* ── Unsaved draft restore banner ────────────────────────────────── */}
         {draftToRestore && !active && !saving && (
@@ -858,79 +934,13 @@ export default function LiveSessionPage() {
           </div>
         )}
 
-        {/* ── Parent context panel (continuation sessions only) ───────────── */}
-        {continueCtx && (
-          <div className="shrink-0 grid grid-cols-1 md:grid-cols-2 gap-3 px-6 py-3 border-b border-white/8 bg-slate-900/40">
-
-            {/* Patient summary card */}
-            {continueCtx.parentSummary && Object.values(continueCtx.parentSummary).some(Boolean) && (
-              <div className="rounded-lg border border-slate-700/60 bg-slate-800/50 p-3">
-                <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500 mb-2">Previous Visit — Patient</p>
-                <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-                  {continueCtx.parentSummary.patient_name   && <><span className="text-slate-500">Name</span>   <span className="text-slate-200 truncate">{continueCtx.parentSummary.patient_name}</span></>}
-                  {continueCtx.parentSummary.patient_age    && <><span className="text-slate-500">Age</span>    <span className="text-slate-200">{continueCtx.parentSummary.patient_age}</span></>}
-                  {continueCtx.parentSummary.patient_gender && <><span className="text-slate-500">Gender</span> <span className="text-slate-200">{continueCtx.parentSummary.patient_gender}</span></>}
-                  {continueCtx.parentSummary.disease        && <><span className="text-slate-500">Condition</span><span className="text-slate-200 truncate col-span-1">{continueCtx.parentSummary.disease}</span></>}
-                  {continueCtx.parentSummary.additional_notes && (
-                    <div className="col-span-2 mt-1 text-slate-400 leading-relaxed line-clamp-2">
-                      {continueCtx.parentSummary.additional_notes}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* Follow-up questions checklist */}
-            {continueCtx.followUpQuestions.length > 0 && (
-              <div className="rounded-lg border border-slate-700/60 bg-slate-800/50 p-3">
-                <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500 mb-2">
-                  AI-Suggested Follow-up Questions
-                </p>
-                <ul className="space-y-1.5">
-                  {continueCtx.followUpQuestions.map((q, i) => (
-                    <li key={i} className="flex items-start gap-2">
-                      <button
-                        onClick={() => setCheckedQuestions(prev => {
-                          const next = new Set(prev)
-                          next.has(i) ? next.delete(i) : next.add(i)
-                          return next
-                        })}
-                        className={`mt-0.5 shrink-0 w-3.5 h-3.5 rounded border transition-colors ${
-                          checkedQuestions.has(i)
-                            ? 'bg-emerald-500 border-emerald-500'
-                            : 'border-slate-600 bg-transparent hover:border-slate-400'
-                        }`}
-                      >
-                        {checkedQuestions.has(i) && (
-                          <svg viewBox="0 0 10 10" fill="none" className="w-full h-full p-0.5">
-                            <path d="M1.5 5L4 7.5L8.5 2.5" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                          </svg>
-                        )}
-                      </button>
-                      <span className={`text-xs leading-relaxed transition-colors ${checkedQuestions.has(i) ? 'text-slate-500 line-through' : 'text-slate-300'}`}>
-                        {q}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-                {checkedQuestions.size > 0 && (
-                  <p className="mt-2 text-[10px] text-emerald-500">
-                    {checkedQuestions.size}/{continueCtx.followUpQuestions.length} addressed
-                  </p>
-                )}
-              </div>
-            )}
-
-          </div>
-        )}
-
         {/* ── Top bar ─────────────────────────────────────────────────────── */}
-        <header className="shrink-0 border-b border-white/8 px-6 py-4 flex items-center justify-between gap-4">
+        <header className="flex shrink-0 items-center justify-between gap-3 border-b border-white/8 px-4 py-3 md:gap-4 md:px-6 md:py-4">
           <div>
-            <h1 className="font-display font-bold text-lg text-white">
+            <h1 className="font-display font-bold text-base md:text-lg text-white">
               {continueSessionId ? 'Follow-up Session' : 'Live Session'}
             </h1>
-            <p className="text-xs text-slate-500 mt-0.5">
+            <p className="text-xs text-slate-500 mt-0.5 hidden sm:block">
               WebSocket · Any language → English · AI diarization
               {vocalSupported && (
                 <span className="ml-2 text-brand-400/80">· Say "Audient [command]"</span>
@@ -938,7 +948,7 @@ export default function LiveSessionPage() {
             </p>
           </div>
 
-          <div className="flex items-center gap-2 flex-wrap justify-end">
+          <div className="flex items-center gap-1.5 md:gap-2 flex-wrap justify-end max-w-[60vw] md:max-w-none">
             {active && !paused && <Badge variant="success"    dot>Recording</Badge>}
             {active &&  paused && <Badge variant="warning"    dot>Paused</Badge>}
             {saving            && <Badge variant="processing" dot>Processing…</Badge>}
@@ -988,17 +998,44 @@ export default function LiveSessionPage() {
           </div>
         )}
 
+        {/* Mobile session stats — compact pills (full Session Info is lg+ sidebar) */}
+        <div className="flex shrink-0 gap-2 overflow-x-auto border-b border-white/8 bg-surface-400/90 px-3 py-2 light:border-slate-200 light:bg-slate-100 lg:hidden [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {[
+            { label: 'Duration', value: formatTime(elapsed) },
+            { label: 'Segments', value: segments.length.toString() },
+            { label: 'Words', value: wordCount.toString() },
+          ].map(item => (
+            <span
+              key={item.label}
+              className="inline-flex shrink-0 items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200 light:border-slate-200 light:bg-white light:text-slate-800"
+            >
+              <span className="text-slate-500 light:text-slate-500">{item.label}</span>
+              <span className="font-medium tabular-nums text-white light:text-slate-900">{item.value}</span>
+            </span>
+          ))}
+        </div>
+
         {/* ── Body: controls + side-by-side transcript + sidebar ───────── */}
-        <div className="flex-1 overflow-hidden flex flex-col lg:flex-row gap-6 p-6 min-h-0">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 overflow-hidden p-4 md:gap-6 md:p-6 lg:flex-row">
 
           <div className="flex-1 flex flex-col gap-4 min-w-0 min-h-0">
 
             {/* One live panel: mic + waveform, then transcript directly underneath */}
             <Card variant="elevated" className="flex flex-col flex-1 min-h-0 overflow-hidden p-0">
-              <div className="shrink-0 p-4 lg:p-5 border-b border-white/8 light:border-slate-200/80">
-                <div className="flex flex-col lg:flex-row lg:items-stretch gap-4 lg:gap-6">
-                  <div className="flex flex-col items-center justify-center gap-3 shrink-0 lg:w-52">
-                    <RecordButton state={recordState} onClick={handleToggle} size="lg" />
+              <div className="shrink-0 border-b border-white/8 p-4 light:border-slate-200/80 lg:p-5">
+                <div className="flex flex-col gap-4 md:flex-row md:items-stretch md:gap-6">
+                  <div className="flex w-full shrink-0 flex-col items-center justify-center gap-3 md:w-52">
+                    <RecordButton
+                      state={recordState}
+                      onClick={handleToggle}
+                      size="lg"
+                      className={cn(
+                        'w-full max-w-full',
+                        '[&>div:first-child>span]:hidden md:[&>div:first-child>span]:block',
+                        '[&>div:first-child>button]:h-20 [&>div:first-child>button]:w-full [&>div:first-child>button]:max-w-full [&>div:first-child>button]:rounded-2xl',
+                        'md:[&>div:first-child>button]:h-24 md:[&>div:first-child>button]:w-24 md:[&>div:first-child>button]:max-w-none md:[&>div:first-child>button]:rounded-full',
+                      )}
+                    />
                     {active && (
                       <Button variant="destructive" size="sm" onClick={handleStop} disabled={saving}>
                         <Square size={13} className="mr-1.5 fill-current" />
@@ -1012,7 +1049,7 @@ export default function LiveSessionPage() {
                       </Button>
                     )}
                   </div>
-                  <div className="flex-1 flex flex-col justify-center gap-3 min-w-0">
+                  <div className="flex min-w-0 flex-1 flex-col justify-center gap-3">
                     <Waveform active={active && !paused} />
                     {!connected && (
                       <p className="text-xs text-slate-500 text-center lg:text-left">
@@ -1034,7 +1071,7 @@ export default function LiveSessionPage() {
                 </div>
 
                 {!active && !saving && (
-                  <div className="w-full flex flex-col gap-3 mt-4 pt-4 border-t border-white/6 light:border-slate-200/80">
+                    <div className="mt-4 flex w-full flex-col gap-3 border-t border-white/6 pt-4 light:border-slate-200/80">
                     {/* Auto dual-mic banner — shown when 2+ mics exist and patient mic not yet assigned */}
                     {audioDevices.length >= 2 && !patientDeviceId && !dualMicDismissed && (
                       <div className="flex items-center gap-3 px-3 py-2 rounded-xl bg-brand-500/8 border border-brand-500/20 text-[11px]">
@@ -1054,7 +1091,7 @@ export default function LiveSessionPage() {
                         </button>
                       </div>
                     )}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="flex w-full flex-col gap-3 sm:flex-row sm:flex-wrap">
                       <DeviceSelect
                         icon={<Mic size={10} className="text-brand-400" />}
                         label="Doctor mic"
@@ -1120,9 +1157,61 @@ export default function LiveSessionPage() {
                 </div>
               )}
 
-              <div className={`flex-1 min-h-0 grid grid-cols-1 ${showThirdColumn ? 'lg:grid-cols-3' : 'lg:grid-cols-2'} lg:divide-x divide-white/8 light:divide-slate-200/80`}>
+              <div className="flex shrink-0 border-b border-white/8 bg-white/[0.02] light:border-slate-200 light:bg-slate-50/50 md:hidden">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('clinician')}
+                  className={cn(
+                    'min-h-[48px] flex-1 border-b-2 py-3 text-sm font-medium transition-colors',
+                    activeTab === 'clinician'
+                      ? 'border-brand-500 text-white light:border-brand-600 light:text-slate-900'
+                      : 'border-transparent text-slate-500 hover:text-slate-300 light:text-slate-600 light:hover:text-slate-800',
+                  )}
+                >
+                  Clinician ({clinicianSegments.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('patient')}
+                  className={cn(
+                    'min-h-[48px] flex-1 border-b-2 py-3 text-sm font-medium transition-colors',
+                    activeTab === 'patient'
+                      ? 'border-brand-500 text-white light:border-brand-600 light:text-slate-900'
+                      : 'border-transparent text-slate-500 hover:text-slate-300 light:text-slate-600 light:hover:text-slate-800',
+                  )}
+                >
+                  Patient ({patientSegments.length})
+                </button>
+                {showThirdColumn && (
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('third')}
+                    className={cn(
+                      'min-h-[48px] flex-1 border-b-2 py-3 text-sm font-medium transition-colors',
+                      activeTab === 'third'
+                        ? 'border-brand-500 text-amber-200 light:border-brand-600 light:text-slate-900'
+                        : 'border-transparent text-slate-500 hover:text-slate-300 light:text-slate-600 light:hover:text-slate-800',
+                    )}
+                  >
+                    {thirdSpeakerLabel} ({thirdSpeakerSegments.length})
+                  </button>
+                )}
+              </div>
+
+              <div
+                className={cn(
+                  'grid min-h-0 flex-1 grid-cols-1 divide-y divide-white/8 light:divide-slate-200/80',
+                  'md:grid-cols-2 md:divide-x md:divide-y-0',
+                  showThirdColumn && 'md:grid-cols-3',
+                )}
+              >
                 {/* Clinician column */}
-                <div className="flex flex-col min-h-[min(42vh,22rem)] lg:min-h-[min(52vh,36rem)]">
+                <div
+                  className={cn(
+                    'flex min-h-[min(42vh,22rem)] flex-col md:min-h-[min(52vh,36rem)]',
+                    activeTab !== 'clinician' && 'hidden md:flex',
+                  )}
+                >
                   <div className="shrink-0 flex items-center justify-between px-4 py-2.5 border-b border-white/8 light:border-slate-200/80 bg-white/[0.02] light:bg-slate-50/50">
                     <div className="flex items-center gap-2">
                       <h2 className="font-semibold text-white light:text-slate-900 text-sm">Clinician</h2>
@@ -1163,7 +1252,12 @@ export default function LiveSessionPage() {
                 </div>
 
                 {/* Patient column */}
-                <div className="flex flex-col min-h-[min(42vh,22rem)] lg:min-h-[min(52vh,36rem)] border-t lg:border-t-0 border-white/8 light:border-slate-200/80">
+                <div
+                  className={cn(
+                    'flex min-h-[min(42vh,22rem)] flex-col border-t border-white/8 light:border-slate-200/80 md:min-h-[min(52vh,36rem)] md:border-t-0',
+                    activeTab !== 'patient' && 'hidden md:flex',
+                  )}
+                >
                   <div className="shrink-0 flex items-center justify-between px-4 py-2.5 border-b border-white/8 light:border-slate-200/80 bg-white/[0.02] light:bg-slate-50/50">
                     <div className="flex items-center gap-2">
                       <h2 className="font-semibold text-white light:text-slate-900 text-sm">Patient</h2>
@@ -1208,7 +1302,12 @@ export default function LiveSessionPage() {
 
                 {/* ── Third speaker column ──────────────────────────────── */}
                 {showThirdColumn && (
-                  <div className="flex flex-col min-h-[min(42vh,22rem)] lg:min-h-[min(52vh,36rem)] border-t lg:border-t-0 border-white/8 light:border-slate-200/80">
+                  <div
+                    className={cn(
+                      'flex min-h-[min(42vh,22rem)] flex-col border-t border-white/8 light:border-slate-200/80 md:min-h-[min(52vh,36rem)] md:border-t-0',
+                      activeTab !== 'third' && 'hidden md:flex',
+                    )}
+                  >
                     <div className="shrink-0 flex items-center justify-between px-4 py-2.5 border-b border-white/8 light:border-slate-200/80 bg-amber-500/5">
                       <div className="flex items-center gap-2">
                         <h2 className="font-semibold text-amber-300 text-sm">{thirdSpeakerLabel}</h2>

@@ -112,7 +112,9 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="h-screen sticky top-0 w-64 flex flex-col border-r border-white/8 bg-surface-100/80 backdrop-blur-xl shrink-0 light:bg-white/95 light:border-slate-200/90 light:shadow-[1px_0_0_rgba(0,0,0,0.04)]">
+    <>
+    <div className="relative hidden md:block w-64 shrink-0">
+    <aside className="absolute inset-y-0 left-0 flex h-full w-64 flex-col border-r border-white/8 bg-surface-100/80 backdrop-blur-xl light:bg-white/95 light:border-slate-200/90 light:shadow-[1px_0_0_rgba(0,0,0,0.04)]">
 
       {/* Logo + notifications */}
       <div className="flex items-center gap-2 px-4 py-5 border-b border-white/6 overflow-visible light:border-slate-200/80">
@@ -322,5 +324,58 @@ export function Sidebar() {
         </div>
       </div>
     </aside>
+    </div>
+    <BottomNav />
+    </>
+  )
+}
+
+const bottomNavItems = [
+  { to: '/app', label: 'Dashboard', icon: LayoutDashboard, end: true },
+  { to: '/patients', label: 'Patients', icon: Users, end: true },
+  { to: '/consults', label: 'Consultations', icon: MessageSquare, end: false },
+  { to: '/live', label: 'New Session', icon: Mic, end: false },
+] as const
+
+export function BottomNav() {
+  return (
+    <nav
+      className={cn(
+        'fixed bottom-0 left-0 right-0 z-50 flex md:hidden',
+        'max-w-[100vw] overflow-x-hidden',
+        'border-t border-white/8 bg-surface-100/95 backdrop-blur-xl',
+        'light:border-slate-200 light:bg-white/95',
+        'px-2 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]',
+        'shadow-[0_-8px_32px_rgba(0,0,0,0.2)] light:shadow-[0_-4px_24px_rgba(15,23,42,0.08)]',
+      )}
+      aria-label="Primary"
+    >
+      {bottomNavItems.map(({ to, label, icon: Icon, end }) => (
+        <NavLink
+          key={to}
+          to={to}
+          end={end}
+          className={({ isActive }) =>
+            cn(
+              'flex min-h-[56px] min-w-[44px] flex-1 flex-col items-center justify-center gap-1 rounded-xl px-1 text-center theme-transition',
+              isActive
+                ? 'text-brand-300 light:text-brand-700'
+                : 'text-slate-400 hover:text-slate-200 light:text-slate-600 light:hover:text-slate-900',
+            )
+          }
+        >
+          {({ isActive }) => (
+            <>
+              <Icon
+                size={22}
+                strokeWidth={isActive ? 2.25 : 2}
+                className={isActive ? 'text-brand-400 light:text-brand-600' : undefined}
+              />
+              <span className="max-w-full truncate text-[11px] font-medium leading-tight">{label}</span>
+            </>
+          )}
+        </NavLink>
+      ))}
+    </nav>
   )
 }

@@ -252,10 +252,10 @@ export default function DashboardPage() {
       <Sidebar />
 
       <main className="flex-1 overflow-y-auto light:bg-slate-100">
-        <div className="max-w-6xl mx-auto px-6 py-8">
+        <div className="max-w-6xl mx-auto px-4 md:px-6 py-6 md:py-8">
 
           {/* ── Page header ──────────────────────────────── */}
-          <div className="flex items-start justify-between mb-8">
+          <div className="flex items-start justify-between gap-3 mb-6 md:mb-8">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2 gap-y-1">
                 <h1 className="font-display font-bold text-2xl text-white light:text-slate-900">
@@ -291,7 +291,7 @@ export default function DashboardPage() {
               </button>
               <Link
                 to="/live"
-                className="inline-flex items-center gap-2 h-10 px-4 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-sm font-medium shadow-glow transition-colors"
+                className="inline-flex items-center gap-2 h-10 px-3 md:px-4 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-sm font-medium shadow-glow transition-colors whitespace-nowrap"
               >
                 <Plus size={15} />
                 New Session
@@ -350,8 +350,8 @@ export default function DashboardPage() {
           </AnimatePresence>
 
           {/* ── Search + filter ───────────────────────────── */}
-          <div className="flex items-center gap-3 mb-6">
-            <div className="relative flex-1 max-w-sm">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3 mb-6">
+            <div className="relative w-full sm:flex-1 sm:max-w-sm">
               <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
               <input
                 type="text"
@@ -365,13 +365,13 @@ export default function DashboardPage() {
               />
             </div>
 
-            <div className="flex items-center gap-1 bg-white/4 border border-white/8 rounded-xl p-1 light:bg-slate-100 light:border-slate-200">
+            <div className="flex items-center gap-1 bg-white/4 border border-white/8 rounded-xl p-1 light:bg-slate-100 light:border-slate-200 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               {(['all', 'complete', 'approved', 'processing', 'failed'] as StatusFilter[]).map(f => (
                 <button
                   key={f}
                   onClick={() => setStatusFilter(f)}
                   className={cn(
-                    'h-8 px-3 rounded-lg text-xs font-medium capitalize transition-all duration-150',
+                    'h-8 px-3 rounded-lg text-xs font-medium capitalize transition-all duration-150 shrink-0',
                     statusFilter === f
                       ? 'bg-brand-600 text-white shadow-glow'
                       : 'text-slate-400 hover:text-slate-200 hover:bg-white/5 light:text-slate-600 light:hover:text-slate-900 light:hover:bg-slate-200/80',

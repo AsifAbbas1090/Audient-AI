@@ -72,7 +72,7 @@ type RawSegment = {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const CHUNK_MS         = 4_000   // send interval: assemble + ship a window blob every 4s
-const WINDOW_SUBS      = 10      // 10 × 500ms = 5s audio per Whisper request (1s overlap with prior send)
+const WINDOW_SUBS      = 10    // 8 × 500ms = 4s audio per Whisper request (no overlap with prior send)
 const EXTRACT_MS       = 60_000  // incremental extraction interval
 const LLM_CORRECT_MS   = 25_000  // LLM speaker-correction interval
 const LLM_CORRECT_WINDOW = 30    // sliding window: max segments sent per LLM call
@@ -368,7 +368,7 @@ export function useLiveSession(opts: {
     // Doctor chunks: assemble last WINDOW_SUBS sub-chunks (4s) and ship to Groq
     chunkIntervalRef.current = setInterval(() => {
       const blob = doctorRec.getWindowBlob(WINDOW_SUBS)
-      if (blob && blob.size >= 500) sendChunk(blob)
+      if (blob && blob.size >= 500) sendChunk(blob, false, 'Doctor')
     }, CHUNK_MS)
 
     // Patient chunks (dual-mic) — forced_speaker tag means server skips diarization
@@ -500,7 +500,7 @@ export function useLiveSession(opts: {
     const isFinalStop = !active
     const finish = async () => {
       const blob = doctorRec.getWindowBlob(WINDOW_SUBS)
-      if (blob && blob.size >= 500) await sendChunk(blob, isFinalStop)
+      if (blob && blob.size >= 500) await sendChunk(blob, isFinalStop, 'Doctor')
       if (isFinalStop) {
         await runExtract()
       }
