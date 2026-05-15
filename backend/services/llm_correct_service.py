@@ -16,7 +16,7 @@ import json
 import re
 from typing import List, Dict, Any, Optional
 
-MAX_SEGS = 50   # 70B model handles larger windows comfortably
+MAX_SEGS = 25   # 70B model handles larger windows comfortably
 
 _SYSTEM = (
     "You are a clinical transcription analyst specialising in doctor-patient "
@@ -147,6 +147,18 @@ _DOCTOR_SIGNALS = [
     r"\bdosage\b", r"\bblood (work|test|pressure)\b", r"\bscan shows\b",
     r"\btake (it |this )?(once|twice|three times)\b",
     r"\bcome back\b", r"\bfollow.?up\b", r"\bavoid\b.*\bdays?\b",
+    r"\bi see\b",
+    r"\bgot it\b",
+    r"\bthat (makes sense|sounds|is)\b",
+    r"\bi understand\b",
+    r"\bthank you for (sharing|telling|clarifying|letting me know)\b",
+    r"\bdoes that sound\b",
+    r"\bi appreciate\b",
+    r"\bokay,? (so|let|now|we|i)\b",
+    r"\bright,? (so|let|now|okay)\b",
+    r"\blet me (check|look|ask|see|make sure)\b",
+    r"\bwe (might|should|need to|can|could)\b",
+    r"\bwould you (say|describe|call|rate)\b",
 ]
 _PATIENT_SIGNALS = [
     r"\bi (have|had|am|feel|felt|been|was)\b",
@@ -213,7 +225,7 @@ def correct_speakers(
         anchor_lines = "\n".join(
             f'  {{"id": {s["id"]}, "speaker": "{s.get("speaker", "?")}", '
             f'"text": "{_safe_text(str(s.get("text", "")).strip())}"}}'
-            for s in anchor_segments[-20:]
+            for s in anchor_segments[-12:]
         )
         anchor_text = (
             "\n\nCONTEXT SEGMENTS (already confirmed — do NOT relabel these,\n"
@@ -248,7 +260,7 @@ def correct_speakers(
                     {"role": "system", "content": _SYSTEM},
                     {"role": "user",   "content": prompt},
                 ],
-                max_tokens=1200,
+                max_tokens=900,
                 temperature=0,
             ),
         )

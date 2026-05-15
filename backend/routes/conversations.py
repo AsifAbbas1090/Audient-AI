@@ -875,7 +875,15 @@ def export_pdf(conv_id: str):
 
     try:
         pdf_bytes = generate_session_pdf(conv, audience=audience)
-        safe_title = (conv.title or "session").replace(" ", "_")[:40]
+        safe_title = (
+            (conv.title or "session")
+            .encode("latin-1", errors="replace")
+            .decode("latin-1")
+            .replace(" ", "_")
+            .replace("—", "-")
+            .replace("–", "-")
+            [:40]
+        )
         prefix = "patient_visit" if audience == "patient" else "clinical_note"
         filename = f"audient_{prefix}_{safe_title}_{conv.id[:8]}.pdf"
 

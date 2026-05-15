@@ -421,7 +421,7 @@ def transcribe(
                 "No Groq API keys configured. Set GROQ_API_KEYS or GROQ_API_KEY in .env, "
                 "or set TRANSCRIBE_PROVIDER=openai with OPENAI_API_KEY"
             )
-        result = _transcribe_groq(audio_path, task, language_hint, context, session_id=session_id)
+        result = _transcribe_groq(audio_path, task, language_hint, context)
 
     segments = result.get("segments", [])
     segments = [s for s in segments if not is_hallucination(s.get("text", ""))]

@@ -180,27 +180,37 @@ export function useLiveSession(opts: {
           end:     (s.end   ?? 0) + timeOffsetRef.current,
         }))
 
-      // Remove segments whose text already exists in recent state.
-      // Whisper re-transcribes the ~1s overlap between consecutive audio
-      // windows, producing identical or near-identical trailing segments.
-      // We drop any incoming segment whose normalized text matches the
-      // last 5 segments or overlaps (suffix/prefix) with them.
+      // Similarity-based dedup — catches Whisper overlap re-transcriptions
+      // that differ slightly in wording ("All right" vs "Alright", etc.)
       const recentTexts = segmentsRef.current
-        .slice(-5)   // check last 5, not 3
+        .slice(-8)
         .map(s => s.text.trim().toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' '))
 
+      function _similarity(a: string, b: string): number {
+        if (!a || !b) return 0
+        const shorter = a.length < b.length ? a : b
+        const longer  = a.length < b.length ? b : a
+        if (longer.length === 0) return 1.0
+        // Count matching characters in order (simple overlap ratio)
+        let matches = 0
+        let j = 0
+        for (let i = 0; i < shorter.length; i++) {
+          while (j < longer.length && longer[j] !== shorter[i]) j++
+          if (j < longer.length) { matches++; j++ }
+        }
+        return matches / longer.length
+      }
+
       const deduped = newSegs.filter(s => {
-        const norm = s.text.trim().toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ')
-        if (norm.length < 6) return false   // drop very short segments entirely
+        const norm = s.text.trim().toLowerCase()
+          .replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ')
+        if (norm.length < 6) return false
+        // Drop if any recent segment is >80% similar
         return !recentTexts.some(r => {
           if (!r || r.length < 6) return false
-          if (r === norm) return true                          // exact match
-          if (r.includes(norm) || norm.includes(r)) return true  // substring
-          // Overlap: tail of recent matches head of new (Whisper overlap artifact)
-          const overlapLen = Math.min(20, Math.floor(norm.length * 0.6))
-          const tail = r.slice(-overlapLen)
-          const head = norm.slice(0, overlapLen)
-          return tail.length > 8 && head.startsWith(tail.slice(-8))
+          if (r === norm) return true
+          if (r.includes(norm) || norm.includes(r)) return true
+          return _similarity(norm, r) > 0.80
         })
       })
 
