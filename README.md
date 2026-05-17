@@ -1,323 +1,339 @@
-# Audient AI — AI-Powered Medical Consultation System
+<div align="center">
 
-An end-to-end clinical documentation platform. Doctors conduct consultations naturally while the system handles real-time transcription, speaker identification (Doctor vs Patient), structured data extraction, field-gap alerts, AI clinical recommendations, and record approval — eliminating manual note-taking.
+```
+╔═══════════════════════════════════════════════════════════════╗
+║                                                               ║
+║    ██████╗ ██╗   ██╗██████╗ ██╗███████╗███╗   ██╗████████╗   ║
+║   ██╔══██╗██║   ██║██╔══██╗██║██╔════╝████╗  ██║╚══██╔══╝   ║
+║   ███████║██║   ██║██║  ██║██║█████╗  ██╔██╗ ██║   ██║      ║
+║   ██╔══██║██║   ██║██║  ██║██║██╔══╝  ██║╚██╗██║   ██║      ║
+║   ██║  ██║╚██████╔╝██████╔╝██║███████╗██║ ╚████║   ██║      ║
+║   ╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚═╝╚══════╝╚═╝  ╚═══╝   ╚═╝      ║
+║                                                               ║
+║              A I   ·   M E D I C A L   ·   S Y S T E M       ║
+║                                                               ║
+╚═══════════════════════════════════════════════════════════════╝
+```
 
-[![Frontend](https://img.shields.io/badge/frontend-React%2018%20%2B%20Vite-blue)]()
-[![Backend](https://img.shields.io/badge/backend-Flask%20%2B%20Groq-yellow)]()
-[![DB](https://img.shields.io/badge/database-Supabase%20PostgreSQL-green)]()
-[![Status](https://img.shields.io/badge/status-FYP%20MVP-orange)]()
+### *The doctor speaks. Audient listens. The record writes itself.*
+
+<br/>
+
+[![React](https://img.shields.io/badge/React_18-0d9488?style=for-the-badge&logo=react&logoColor=white)](https://reactjs.org)
+[![TypeScript](https://img.shields.io/badge/TypeScript-0891b2?style=for-the-badge&logo=typescript&logoColor=white)](https://typescriptlang.org)
+[![Flask](https://img.shields.io/badge/Flask_3-0f766e?style=for-the-badge&logo=flask&logoColor=white)](https://flask.palletsprojects.com)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-0284c7?style=for-the-badge&logo=postgresql&logoColor=white)](https://supabase.com)
+[![Groq](https://img.shields.io/badge/Groq_AI-06b6d4?style=for-the-badge&logo=openai&logoColor=white)](https://console.groq.com)
+[![Docker](https://img.shields.io/badge/Docker-0369a1?style=for-the-badge&logo=docker&logoColor=white)](https://docker.com)
+
+[![Build](https://img.shields.io/badge/build-passing-10b981?style=flat-square)](.)
+[![Version](https://img.shields.io/badge/version-v1.0--final-0d9488?style=flat-square)](.)
+[![FYP](https://img.shields.io/badge/FYP-IT22__OC__02-0891b2?style=flat-square)](.)
+[![License](https://img.shields.io/badge/license-Academic-0f766e?style=flat-square)](.)
+
+</div>
+
+---
+
+## What is Audient AI?
+
+Clinicians spend **30–40% of their working time** on documentation instead of patients. Audient AI eliminates that burden entirely.
+
+Start a session. Speak naturally. Walk away with a fully structured clinical record.
+
+The system transcribes every word in real time, identifies who is the doctor and who is the patient, extracts seven clinical data fields automatically, flags anything missing, generates AI-powered clinical insights, and exports a professional PDF — all without the doctor writing a single note.
+
+> **Built as a Final Year Project (FYP) — IT22\_OC\_02**
 
 ---
 
 ## Table of Contents
 
-1. [Project Overview](#1-project-overview)
-2. [Tech Stack](#2-tech-stack)
-3. [Architecture](#3-architecture)
-4. [Features](#4-features)
-5. [Audio & Data Storage](#5-audio--data-storage)
-6. [PRD Compliance — Done vs Left](#6-prd-compliance--done-vs-left)
-7. [Setup & Running](#7-setup--running)
-8. [Environment Variables](#8-environment-variables)
-9. [API Reference](#9-api-reference)
-10. [Efficiency Enhancements](#10-efficiency-enhancements)
+- [How It Works](#how-it-works)
+- [Feature Overview](#feature-overview)
+- [Technology Stack](#technology-stack)
+- [Project Structure](#project-structure)
+- [Quick Start](#quick-start)
+- [Environment Variables](#environment-variables)
+- [API Reference](#api-reference)
+- [Deployment](#deployment)
+- [Screenshots](#screenshots)
+- [Contributing](#contributing)
+- [Team](#team)
 
 ---
 
-## 1. Project Overview
+## How It Works
 
-**Audient AI** is an AI-powered medical consultation platform built as a Final Year Project. It solves the real clinical problem of manual documentation — a task that consumes 30–40% of a clinician's time and introduces transcription errors.
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                     AUDIENT AI — LIVE PIPELINE                      │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  Doctor + Patient speak                                             │
+│       │                                                             │
+│       ▼                                                             │
+│  Browser MediaRecorder  ──── 500ms chunks ────► Socket.IO           │
+│       │                                              │              │
+│       │                           ┌─────────────────▼────────────┐ │
+│       │                           │   Groq Whisper large-v3      │ │
+│       │                           │   (every 4 seconds)          │ │
+│       │                           └─────────────────┬────────────┘ │
+│       │                                             │              │
+│       │                           ┌─────────────────▼────────────┐ │
+│       │                           │  Speaker Diarization         │ │
+│       │                           │  Groq Llama-3.3-70b (text)   │ │
+│       │                           │  + Pyannote audio (optional) │ │
+│       │                           └─────────────────┬────────────┘ │
+│       │                                             │              │
+│       │                           ┌─────────────────▼────────────┐ │
+│       │                           │  Medical Field Extraction    │ │
+│       │                           │  Groq Llama-3.1-8b           │ │
+│       │                           │  (name, age, disease, etc.)  │ │
+│       │                           └─────────────────┬────────────┘ │
+│       │                                             │              │
+│       │                           ┌─────────────────▼────────────┐ │
+│       │                           │  Supabase PostgreSQL         │ │
+│       │                           │  Structured Clinical Record  │ │
+│       │                           └─────────────────┬────────────┘ │
+│       │                                             │              │
+│       └─────────────────────────────────────────────▼────────────  │
+│                            PDF Export + Approval                    │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
 
-The doctor starts a session, speaks naturally with their patient, and the platform handles everything: real-time transcription, speaker separation, medical data extraction, missing-field alerts, AI clinical recommendations, patient record linking, and final record approval.
-
-**User roles:** `healthcare` (clinician) · `admin` (clinic administrator)
+**Two recording modes:**
+- **Live Session** — real-time streaming, transcript updates every 4 seconds
+- **ASR Upload** — upload a pre-recorded audio file for batch processing
 
 ---
 
-## 2. Tech Stack
+## Feature Overview
 
-| Layer | Technology |
+### Core Clinical Features
+
+| Feature | Description |
 |---|---|
-| Frontend | React 18, TypeScript, Vite, Tailwind CSS, Framer Motion |
-| Backend | Flask 3, Flask-SocketIO, SQLAlchemy 2, Celery (optional Redis), PyJWT, bcrypt |
-| Database | Supabase PostgreSQL |
-| Transcription | Groq Whisper API (`whisper-large-v3`) |
-| AI Extraction | Groq LLM (`llama-3.1-8b-instant`, configurable) |
-| Text diarization (Doctor/Patient) | Groq LLM (`GROQ_DIARIZE_MODEL`, default `llama-3.3-70b-versatile`) |
-| Speaker Diarization (offline) | pyannote.audio 3.1 (optional — requires `HF_TOKEN`) |
-| Offline Extraction Fallback | Ollama (`phi3:mini`) |
-| Voice Commands | Web Speech API (Chrome / Edge only) |
+| **Real-Time Transcription** | Browser mic streams to Groq Whisper large-v3 every 4 seconds via WebSocket |
+| **Speaker Diarization** | Labels each line as `[DR]` Doctor or `[PT]` Patient — Groq LLM (always) + Pyannote.audio (optional) |
+| **Medical Field Extraction** | Automatically extracts Name, Age, Gender, Disease, Education, Emotional State, Notes |
+| **Field-Gap Alerts** | Three severity levels — Critical (red), Important (yellow), Optional (grey) — per missing field |
+| **AI Clinical Recommendations** | One click generates differential diagnoses, suggested tests, treatment options, and risk flags |
+| **Session Approval & Locking** | Approve a record to lock it; approved records are read-only for all non-admin users |
+| **PDF / DOCX Export** | Formatted clinical document with transcript, summary, extracted fields, and doctor info |
+| **Voice Commands** | Say "Audient, start recording" — wake-word detection with audio chime feedback (Chrome/Edge) |
 
----
+### Patient & Session Management
 
-## 3. Architecture
-
-```
-Browser (React SPA)
-  │
-  ├── Live: MediaRecorder → every **4s** send a window (~**5s** audio = 10×500ms slices) ──Socket.IO `audio_chunk`──► Groq whisper-large-v3
-  │         └── `transcript_update` (+ rolling transcript context capped ~800 chars per `session_id`)
-  ├── Live: request_diarize ~15s + POST /api/extract ~60s (preview fields)
-  │
-  ├── ASR page: full file → POST /api/transcribe ─► Groq Whisper
-  │
-  ├── POST /api/conversations/:id/complete → 202 + background task
-  │       └── diarize + extract → save transcript/summary → status complete (+ enrich async)
-  │
-  └── REST + Socket.IO → Flask → SQLAlchemy → Supabase PostgreSQL
-```
-
-**Live audio lifecycle (primary path):**
-```
-Browser mic → windowed WebM blob → Socket.IO emit(audio_chunk)
-  → temp/ws_<uuid>.webm → Groq Whisper API → transcript_update to client → temp deleted
-Optional HF_TOKEN: chunks folded into temp/sessions/<session_id>.wav for pyannote
-```
-
-**ASR upload path:** multipart `POST /api/transcribe` (same Whisper service), then save via `POST /api/conversations`.
-
----
-
-## 4. Features
-
-### Authentication & Roles
-- **Short-lived access JWT** (Bearer, stored in `localStorage`) + **httpOnly refresh cookie** (`POST /api/auth/refresh` rolls it). Configurable expiry via `JWT_ACCESS_EXPIRY_MINUTES` / `JWT_REFRESH_EXPIRY_DAYS` in `.env`.
-- Two roles: `healthcare` and `admin` with route guards on both frontend and backend
-- Register, login, logout, offline password reset (no email verification — suitable for clinic-local deployments)
-- Sessions recorded anonymously before login are auto-claimed when the user signs in
-
-### Live Recording Session
-- Browser `MediaRecorder` streams ~4s WebM windows over **Socket.IO** (`audio_chunk`); server calls Groq Whisper per window
-- Transcript grows in real time via `transcript_update` events
-- Speaker diarization: WebSocket `request_diarize` ~every 15s (and `/api/session/diarize` exists for HTTP polling); optional **dual mic** (`patientDeviceId`) tags patient chunks with `forced_speaker`
-- Incremental extraction: frontend `POST /api/extract` ~every **60s** during live session for on-screen field preview
-- Waveform animation, recording duration timer, visual session state indicator
-
-### Vocal Commands (Chrome / Edge)
-- Web Speech API listens continuously while enabled
-- Commands: **"start recording"**, **"stop recording"**, **"end session"**, **"pause"**, **"resume"**, **"clear"**
-- Toggle button in session header with pulse animation; command flash pill on detection
-- Gracefully disabled (no crash) on unsupported browsers
-
-### Speaker Diarization
-- **Online (default):** Groq LLM reads the full transcript and assigns `Doctor` / `Patient` labels
-- **Offline (optional):** Set `HF_TOKEN` and install `pyannote.audio` for audio-based diarization — more accurate
-- Frontend renders Doctor as `[DR]` and Patient as `[PT]` with distinct colours
-
-### Automatic Data Extraction
-After a session ends, the transcript is sent to Groq `llama-3.1-8b-instant` which extracts:
-- Patient Name, Age, Gender
-- Disease / Chief Complaint
-- Education, Emotional State, Additional Notes
-
-Extracted fields auto-fill the summary form on the Session Detail page.
-
-### Field Alert Reminders
-After saving a summary the backend checks for gaps and creates `FieldReminder` records at three severity levels:
-- **Critical** — Name, Age, Gender, Disease
-- **Important** — Symptoms, Medical history
-- **Optional** — Education, Emotional state, Notes
-
-Each alert can be individually dismissed.
-
-### AI Clinical Recommendations
-One-click button on Session Detail sends the transcript + summary to Groq and returns:
-- Differential diagnosis
-- Suggested diagnostic tests
-- Treatment suggestions
-- Follow-up notes
-- Risk flags
-
-Results are shown in a Clinical Insights card and are never auto-saved.
-
-### Patient Management (EMR)
-- Full CRUD for patient records (name, age, gender, contact, medical history)
-- Link any conversation to an existing patient via 300ms debounced search dropdown
-- Create a new patient record directly from the session detail page
-- Linked patient name shown on session cards and in analytics
-
-### Session Approval Workflow
-- Status lifecycle: `processing → complete → approved`
-- **Approve** locks the record and writes `approved_at` timestamp
-- Approved records cannot be edited by regular users; admins can still modify
-- Admin can soft-delete sessions (`deleted_at` timestamp); records are hidden but restorable
-
-### Dashboard
-- Session grid with live search and status filter pills (All / Complete / Approved / Processing / Failed)
-- Stats row: total sessions, completed, average duration, this week count
-- Skeleton loading states, empty state CTA
-
-### Analytics
-- Completion rate over time (area chart)
-- Sessions by day of week (bar chart)
-- Session status breakdown with counts and colour-coded badges
-- Language distribution
-
-### Admin Panel
-- Platform-wide stats (users, conversations by status, soft-delete aware)
-- User management: list, update role/process mode, delete accounts
-- Audit log: last 50 events colour-coded by action (session created, approved, deleted, restored, role changed)
-- Restore soft-deleted conversations
-
-### Record & Extract (ASR Page)
-- Upload a pre-recorded audio file (WAV, MP3, WebM, M4A)
-- Transcription + diarization in one pass
-- Extraction form auto-filled from result
-- Download transcript as plain text
-
----
-
-## 5. Audio & Data Storage
-
-### Where does audio go?
-
-| Stage | Location | Persisted? |
-|---|---|---|
-| Browser recording | Browser memory (MediaRecorder blob) | No |
-| Each live chunk | `backend/temp/ws_<uuid>.webm` | Temp — deleted after Groq returns |
-| Session WAV accumulation | `backend/temp/sessions/<id>.wav` | Written when `HF_TOKEN` set (pyannote path); optional otherwise |
-| Long-term audio storage | `audio_files` DB table (`file_url` column) | **Not implemented** — model scaffolded, upload pipeline not built |
-
-**In plain terms: audio is never stored permanently in the current build.** It is transcribed on-the-fly and discarded. The `AudioFile` model and `file_url` column are ready for a future Supabase Storage / S3 integration.
-
-### Where does structured data go?
-
-| Data | Table | Notes |
-|---|---|---|
-| Session metadata | `conversations` | title, language, duration, status, soft-delete timestamp, patient FK |
-| Full transcript | `transcripts` + `transcript_segments` | Speaker label, start/end timestamps per segment |
-| Extracted summary | `summaries` | Name, Age, Gender, Disease, Education, EmotionalState, Notes |
-| Field gap alerts | `field_reminders` | Severity, field name, resolved flag |
-| Patient records | `patients` | Name, age, gender, contact, medical history |
-| Audit events | `audit_logs` | Action, resource type, user, timestamp |
-| Users | `users` | Name, email, password_hash, role, last_login_at |
-
-All data lives in **Supabase PostgreSQL** with SSL. Nothing is stored locally on the server between requests.
-
----
-
-## 6. PRD Compliance — Done vs Left
-
-### Implemented
-
-| PRD Feature | How |
+| Feature | Description |
 |---|---|
-| AI Vocal Prompts | Web Speech API — toggle button, pulse animation, command flash pill |
-| Speaker Diarization | Groq LLM text-based (online) + pyannote.audio (offline optional) |
-| Auto Data Extraction | Post-session Groq extraction, 7 structured fields |
-| Inline Editing | Full inline editor on Session Detail page |
-| Smart Field Alerts | FieldReminder model, 3 severity levels, per-field dismiss |
-| Symptom Recommendations | Groq AI: differential diagnosis, tests, treatment, risk flags |
-| EMR Patient Linking | Patient CRUD, search autocomplete, link/unlink from session |
-| Patient Autocomplete | 300ms debounced search with dropdown |
-| Soft Record Deletion | `deleted_at` timestamp, admin restore |
-| Session Approval / Lock | `approved` status, `approved_at` timestamp, edit lock for non-admins |
-| Audit Log | Key actions logged; visible in Admin panel |
-| Role-Based Access Control | `healthcare` / `admin`, route guards frontend + backend |
-| JWT Authentication | Access + refresh (httpOnly cookie), `/api/auth/refresh`, logout revokes refresh |
-| Session Ownership Linking | Orphaned sessions auto-claimed on login |
+| **Patient EMR** | Full CRUD for patient records with auto-generated PAT-XXXX codes per clinician |
+| **Session Linking** | Link any session to a patient via 300ms debounced autocomplete search |
+| **Patient Thread** | View all sessions for one patient in chronological order |
+| **Soft Deletion** | Sessions are never permanently deleted — `deleted_at` timestamp, admin-restorable |
+| **Peer Consultation** | Request a Quick Opinion (4h), Formal Consult (48h), or Urgent Review (24h) from a colleague |
+| **Session Sharing** | Grant read/comment/write access to a colleague with optional expiry |
 
-### Not Yet Implemented
+### Platform & Administration
 
-| PRD Feature | Gap | Notes |
-|---|---|---|
-| Streaming NLP / token streaming | Extract uses discrete REST calls | Live preview via periodic `/api/extract` already works |
-| Polyphonic speaker separation from single mic | Best-effort LLM/pyannote labels | Dual-mic path labels channels explicitly |
-| Audio persistence (Supabase Storage / S3) | Audio deleted after transcription | `AudioFile` model ready; upload pipeline not built |
-| Email-based password reset | Offline reset only (no verification email sent) | Optional: Resend (`RESEND_API_KEY`) used for session-complete emails, not reset |
-| HIPAA / PDPA compliance controls | No data residency, audit controls minimal | Supabase handles encryption at rest; app-layer controls not implemented |
+| Feature | Description |
+|---|---|
+| **Role-Based Access** | `healthcare` (clinician) and `admin` roles with route guards on frontend and backend |
+| **Audit Trail** | Every sensitive action (approve, delete, restore, role change) logged to `audit_logs` |
+| **Admin Panel** | Platform stats, user management, audit log viewer, and soft-delete restore |
+| **Analytics Dashboard** | Completion rate, sessions by day, language distribution, top diseases |
+| **Custom Templates** | Doctor-defined clinical note layouts with full version history |
+| **Dark / Light Theme** | System-aware theme with user override |
+| **Async Processing** | Celery + Redis handles post-session diarization, extraction, and email notifications |
 
 ---
 
-## 7. Setup & Running
+## Technology Stack
+
+### Frontend
+
+| Technology | Version | Purpose |
+|---|---|---|
+| React | 18.3.1 | UI framework |
+| TypeScript | 5.6 | Type safety |
+| Vite | 5.4.9 | Build tool & dev server |
+| Tailwind CSS | 3.4.13 | Utility-first styling |
+| Framer Motion | 11.0 | Animations |
+| Socket.IO Client | 4.8.3 | WebSocket real-time connection |
+| Axios | 1.7.7 | HTTP client with auth interceptors |
+| Recharts | — | Analytics charts |
+
+### Backend
+
+| Technology | Version | Purpose |
+|---|---|---|
+| Flask | 3.x | Web framework |
+| Flask-SocketIO | 5.3.6+ | WebSocket server |
+| SQLAlchemy | 2.x | ORM and database abstraction |
+| PyJWT + bcrypt | 2.8.0+ | Authentication and password hashing |
+| Celery | 5.3.0+ | Background task queue |
+| Redis | 5.0.0+ | Task broker and rate limit store |
+| Flask-Limiter | 4.0.0+ | API rate limiting |
+| ReportLab | 4.0.0+ | PDF generation |
+| Resend | 2.0.0+ | Email notifications |
+| Gunicorn | — | Production WSGI server |
+
+### AI & Machine Learning
+
+| Model | Provider | Purpose |
+|---|---|---|
+| Whisper large-v3 | Groq API | Real-time speech-to-text |
+| Llama-3.1-8b-instant | Groq API | Medical field extraction |
+| Llama-3.3-70b-versatile | Groq API | Speaker diarization (text-based) |
+| pyannote/speaker-diarization-3.1 | HuggingFace | Audio-based diarization (optional) |
+| phi3:mini | Ollama (local) | Offline extraction fallback |
+| Web Speech API | Browser (Chrome/Edge) | Voice command recognition |
+
+### Infrastructure
+
+| Component | Technology |
+|---|---|
+| Database | Supabase PostgreSQL (cloud-hosted, SSL enforced) |
+| Containerization | Docker Compose |
+| Reverse Proxy | Nginx |
+| CI/CD | GitHub Actions (recommended) |
+
+---
+
+
+---
+
+## Quick Start
 
 ### Prerequisites
 
-- Python 3.11+
-- Node.js 18+
-- A Supabase project (free tier works — grab the `DATABASE_URL` from Project Settings → Database)
-- A Groq API key — free at [console.groq.com](https://console.groq.com)
+| Requirement | Where to get it |
+|---|---|
+| Docker Desktop | [docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop/) |
+| Groq API key (free) | [console.groq.com](https://console.groq.com) |
+| Supabase project (free) | [supabase.com](https://supabase.com) — copy the Database Connection String |
 
-### 1. Clone
+---
+
+### Option A — Docker Compose (Recommended)
 
 ```bash
-git clone <repo-url>
-cd Audient-AI
+# 1. Clone the repository
+git clone https://github.com/MQ-06/audient-ai.git
+cd audient-ai
+
+# 2. Create the environment file
+cp backend/.env.example backend/.env
+#    Open backend/.env and fill in the three required values (see below)
+
+# 3. Initialize the database (first time only)
+docker compose run --rm backend python migrate.py
+
+# 4. Start all services
+docker compose up --build
+
+# 5. Open in browser
+#    Frontend  →  http://localhost:3000
+#    API       →  http://localhost:5000
+#    Health    →  http://localhost:5000/health
 ```
 
-### 2. Backend
+---
+
+### Option B — Manual Setup (No Docker)
+
+**Backend**
 
 ```bash
 cd backend
 
+# Create and activate virtual environment
 python -m venv .venv
-# Windows:
-.venv\Scripts\activate
-# macOS / Linux:
-source .venv/bin/activate
+.venv\Scripts\activate          # Windows
+source .venv/bin/activate       # macOS / Linux
 
 pip install -r requirements.txt
 
-# Create .env (see section 8 below)
+cp .env.example .env            # Fill in required values
 
-python migrate.py     # creates all tables in Supabase
-python app.py         # starts on http://localhost:5000
+python migrate.py               # Create all database tables
+python app.py                   # Start on http://localhost:5000
 ```
 
-### 3. Frontend
+**Frontend**
 
 ```bash
 cd frontend
+
 npm install
-npm run dev           # starts on http://localhost:5173
-```
 
-### 4. Verify
+# Optional: create frontend/.env with:
+# VITE_API_URL=http://localhost:5000
 
-```bash
-curl http://localhost:5000/health
-# → JSON includes "status":"ok", "redis_queue_enabled", "diarization_available", etc.
+npm run dev                     # Start on http://localhost:3000
 ```
 
 ---
 
-## 8. Environment Variables
+### First-Time Admin Setup
 
-### `backend/.env`
+After signing up through the UI, promote your account to admin via the Supabase SQL Editor:
+
+```sql
+UPDATE users SET role = 'admin' WHERE email = 'your@email.com';
+```
+
+---
+
+## Environment Variables
+
+### `backend/.env` — Required
 
 ```env
-# Supabase PostgreSQL (Project Settings → Database → Connection string → URI)
-DATABASE_URL=postgresql://postgres:<password>@db.<project-ref>.supabase.co:5432/postgres
+# ── DATABASE ───────────────────────────────────────────────────────
+# Supabase: Project Settings → Database → Connection String → URI
+DATABASE_URL=postgresql://postgres:<password>@db.<ref>.supabase.co:5432/postgres
 
-# Groq API key — free at https://console.groq.com
+# ── AI ─────────────────────────────────────────────────────────────
+# Free at https://console.groq.com
 GROQ_API_KEY=gsk_...
 
-# JWT — access token TTL + refresh cookie (see config.py for defaults)
-JWT_SECRET_KEY=your-random-jwt-secret
-SECRET_KEY=your-random-flask-secret
+# ── SECURITY ───────────────────────────────────────────────────────
+# Any random string, 32+ characters each
+JWT_SECRET_KEY=your-random-jwt-secret-key
+SECRET_KEY=your-random-flask-secret-key
+```
 
-# Optional: Redis + Celery worker for /complete pipeline (recommended production)
-# REDIS_URL=redis://localhost:6379/0
+### `backend/.env` — Optional Enhancements
 
-# Optional: larger Groq model for text-only Doctor/Patient diarization
-# GROQ_DIARIZE_MODEL=llama-3.3-70b-versatile
+```env
+# ── TASK QUEUE (recommended for production) ────────────────────────
+REDIS_URL=redis://localhost:6379/0
 
-# Optional: pyannote audio-based diarization (more accurate than LLM text-based)
-# Requires: pip install pyannote.audio torch torchaudio
+# ── SPEAKER DIARIZATION (audio-based, more accurate) ───────────────
 # Accept model at: https://huggingface.co/pyannote/speaker-diarization-3.1
+# Then: pip install pyannote.audio torch torchaudio
 HF_TOKEN=hf_...
 
-# Optional: offline LLM extraction fallback (no internet needed)
-# Requires: Ollama running locally with phi3:mini pulled
+# ── OFFLINE FALLBACK (no internet required) ────────────────────────
+# Requires Ollama running locally with phi3:mini pulled
 OLLAMA_BASE_URL=http://localhost:11434/v1
 OLLAMA_EXTRACT_MODEL=phi3:mini
 
-# Server
+# ── EMAIL NOTIFICATIONS ────────────────────────────────────────────
+RESEND_API_KEY=re_...
+
+# ── MODEL OVERRIDES ────────────────────────────────────────────────
+GROQ_DIARIZE_MODEL=llama-3.3-70b-versatile
+GROQ_EXTRACT_MODEL=llama-3.1-8b-instant
+
+# ── SERVER ─────────────────────────────────────────────────────────
 PORT=5000
 FLASK_DEBUG=true
 ```
 
-### `frontend/.env` (optional — defaults to localhost:5000)
+### `frontend/.env` (optional)
 
 ```env
 VITE_API_URL=http://localhost:5000
@@ -325,110 +341,107 @@ VITE_API_URL=http://localhost:5000
 
 ---
 
-## 9. API Reference
 
-### Auth
+## Deployment
 
-| Method | Path | Auth | Description |
-|---|---|---|---|
-| POST | `/api/auth/register` | None | Create account; sets refresh cookie |
-| POST | `/api/auth/login` | None | Sign in; returns access JWT + sets refresh cookie |
-| POST | `/api/auth/refresh` | Cookie | New access JWT from httpOnly refresh token |
-| GET | `/api/auth/me` | Required | Current user from access token |
-| POST | `/api/auth/logout` | Cookie | Revokes refresh tokens, clears cookie |
-| POST | `/api/auth/reset-password` | None | Offline password reset |
+### Localhost (Docker Compose)
 
-### Live session (HTTP + Socket.IO)
+```bash
+docker compose up --build          # Start all services
+docker compose down                # Stop all services
+docker compose down -v             # Stop and remove volumes (fresh start)
+docker compose logs -f backend     # Stream backend logs
+```
 
-| Method / event | Path / channel | Auth | Description |
-|---|---|---|---|
-| POST | `/api/session/start` | Optional | Create session, returns `session_id` |
-| POST | `/api/session/diarize` | None | HTTP diarize (polling alternative to WS) |
-| emit | `audio_chunk` | Bearer in handshake | Binary WebM window → Whisper → server emits `transcript_update` |
-| emit | `request_diarize` | Bearer | Full-segment relabel → `diarize_update` |
+Services started:
 
-### Transcription
-
-| Method | Path | Auth | Description |
-|---|---|---|---|
-| POST | `/api/transcribe` | None | **ASR page**: multipart full-file transcription via Groq (`60/min` rate limit) |
-
-### Conversations
-
-| Method | Path | Auth | Description |
-|---|---|---|---|
-| GET | `/api/conversations` | Required | List user's sessions |
-| GET | `/api/conversations/:id` | Required | Session detail with transcript + summary |
-| GET | `/api/conversations/:id/status` | Required | Poll `{ id, status }` after `/complete` |
-| POST | `/api/conversations/:id/complete` | Required | **`202`** — enqueue background pipeline (`processing` → `complete` / `failed`) |
-| GET | `/api/conversations/:id/export/pdf` | Required | Clinical or patient-facing PDF (ReportLab) |
-| PATCH | `/api/conversations/:id` | Required | Update title / approve session |
-| DELETE | `/api/conversations/:id` | Required | Soft delete |
-| PUT | `/api/conversations/:id/summary` | Required | Save summary fields, generate reminders |
-| PATCH | `/api/conversations/:id/reminders/:rid/resolve` | Required | Dismiss a field reminder |
-| POST | `/api/conversations/:id/recommend` | Required | Generate AI clinical recommendations |
-| PATCH | `/api/conversations/:id/patient` | Required | Link / unlink patient |
-
-### Patients
-
-| Method | Path | Auth | Description |
-|---|---|---|---|
-| GET | `/api/patients` | Required | Search patients (`?q=name`) |
-| POST | `/api/patients` | Required | Create patient |
-| GET | `/api/patients/:id` | Required | Patient detail + recent sessions |
-| PATCH | `/api/patients/:id` | Required | Update patient fields |
-| DELETE | `/api/patients/:id` | Required | Delete patient |
-
-### Admin (admin role only)
-
-| Method | Path | Auth | Description |
-|---|---|---|---|
-| GET | `/api/admin/stats` | Admin | Platform-wide statistics |
-| GET | `/api/admin/users` | Admin | List all users |
-| GET | `/api/admin/users/:id` | Admin | User detail |
-| PATCH | `/api/admin/users/:id` | Admin | Update role / process mode |
-| DELETE | `/api/admin/users/:id` | Admin | Delete user account |
-| GET | `/api/admin/audit-log` | Admin | Recent audit events |
-| POST | `/api/admin/conversations/:id/restore` | Admin | Restore soft-deleted session |
+| Container | URL | Purpose |
+|---|---|---|
+| `audient-frontend` | http://localhost:3000 | React SPA |
+| `audient-backend` | http://localhost:5000 | Flask API + Socket.IO |
+| `audient-redis` | Internal port 6379 | Celery broker |
+| `audient-worker` | — | Celery background worker |
+| `audient-nginx` | http://localhost:80 | Reverse proxy |
 
 ---
 
-## 10. Efficiency Enhancements
 
-### High Impact
 
-**1. Lower live transcription latency**
-Live path already uses **Socket.IO**. Further wins: shorter window size (trade bandwidth vs latency), regional Groq routing.
+## Screenshots
 
-**2. Celery operations**
-`/complete` already dispatches **`process_session`** via Celery when `REDIS_URL` is set (`202` + status poll). Ensure workers run in production; tune concurrency for load.
+> *(Insert screenshots of the following pages in your final submission)*
+---
 
-**3. Audio persistence + playback**
-Store each session's `.webm` to Supabase Storage (one extra API call in `transcribe_audio()`). The `AudioFile` model is already scaffolded. Add an audio player to Session Detail for doctor review.
+## Contributing
 
-### Medium Impact
+This is a solo academic project. Contributions are welcome for learning or extension purposes.
 
-**4. Auth hardening**
-Refresh cookies + `/api/auth/refresh` already exist — extend with stricter CSRF/CORS for cookie auth if exposing multi-origin SPAs.
+1. Fork the repository
+2. Create a feature branch
 
-**5. pyannote.audio diarization**
-Set `HF_TOKEN` and `pip install pyannote.audio torch torchaudio`. The code routes to pyannote when the token is present (Windows: set `FFMPEG_BIN` if TorchCodec DLL errors).
+```bash
+git checkout -b feature/your-feature-name
+```
 
-**6. Incremental extraction**
-Already implemented (`POST /api/extract` ~60s during live). Further work: smarter merge/conflict handling between previews and post-session extract.
+3. Commit using conventional commits
 
-### Low Impact / Polish
+```bash
+git commit -m "feat: describe what you added"
+git commit -m "fix: describe what you fixed"
+```
 
-**7. PDF export** — Implemented: `GET /api/conversations/:id/export/pdf` (ReportLab); template preview PDF under templates routes.
+4. Open a Pull Request targeting `dev`
 
-**8. Rate limiting** — Partially deployed: login/register/transcribe limits in `routes/auth.py` and `routes/transcribe.py` via Flask-Limiter.
+**Branches:**
+- `main` → final production-ready code (tagged releases)
+- `dev` → active development and feature merges
 
-**9. Full-text search index** — PostgreSQL `tsvector` index on `conversations.title` and `patients.name` for fast search as data grows.
+---
 
-**10. Email notifications** — Integrate Resend or SendGrid for password-reset emails and optional "session approved" notifications.
+## Known Limitations
+
+| Item | Status | Notes |
+|---|---|---|
+| Audio persistence | Not implemented | `AudioFile` model scaffolded; upload pipeline not built |
+| Email password reset | Partial | Resend integrated for notifications, not for password reset |
+| HIPAA / PDPA compliance | Not implemented | Supabase handles encryption at rest; app-layer controls not built |
+| Voice commands | Chrome / Edge only | Web Speech API not available in Firefox or Safari |
+| Pyannote diarization | Optional | Requires local GPU + HuggingFace token; Groq LLM fallback always works |
+
+---
+
+## Team
+
+<div align="center">
+
+| | |
+|---|---|
+| **Project** | Audient AI — AI-Powered Medical Consultation System |
+| **Developer** | Muhammad Asif Abbas  |
+| **GitHub** | github.com/masifabbas1090 |
+| **Email** | masifabbas1090@gmail.com |
+| **Supervisor** | Sir Adeel Nisar |
+| **Institution** | Final Year Project — Information Technology |
+| **Version** | v1.0-final |
+
+</div>
 
 ---
 
 ## License
 
-Academic project — Final Year Project (FYP). Not licensed for commercial use.
+This project is developed as an academic Final Year Project. Not licensed for commercial use without explicit permission from the authors.
+
+---
+
+<div align="center">
+
+*Built with purpose — because every minute a doctor spends writing is a minute not spent healing.*
+
+[![React](https://img.shields.io/badge/React_18-0d9488?style=flat-square&logo=react&logoColor=white)](.)
+[![Flask](https://img.shields.io/badge/Flask_3-0891b2?style=flat-square&logo=flask&logoColor=white)](.)
+[![Groq](https://img.shields.io/badge/Groq_AI-06b6d4?style=flat-square&logo=openai&logoColor=white)](.)
+[![Supabase](https://img.shields.io/badge/Supabase-0284c7?style=flat-square&logo=supabase&logoColor=white)](.)
+[![Docker](https://img.shields.io/badge/Docker-0369a1?style=flat-square&logo=docker&logoColor=white)](.)
+
+</div>
