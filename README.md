@@ -31,6 +31,10 @@
 [![FYP](https://img.shields.io/badge/FYP-IT22__OC__02-0891b2?style=flat-square)](.)
 [![License](https://img.shields.io/badge/license-Academic-0f766e?style=flat-square)](.)
 
+<br/>
+
+**[▶ Watch Demo](https://drive.google.com/drive/folders/1pwymVvb0XccAb3O1VTZRP35NO0pCOolq)** &nbsp;·&nbsp; **[🌐 Live App](https://13.210.144.218/)**
+
 </div>
 
 ---
@@ -55,7 +59,6 @@ The system transcribes every word in real time, identifies who is the doctor and
 - [Project Structure](#project-structure)
 - [Quick Start](#quick-start)
 - [Environment Variables](#environment-variables)
-- [API Reference](#api-reference)
 - [Deployment](#deployment)
 - [Screenshots](#screenshots)
 - [Contributing](#contributing)
@@ -151,56 +154,43 @@ The system transcribes every word in real time, identifies who is the doctor and
 
 ## Technology Stack
 
-### Frontend
+**Frontend**
 
-| Technology | Version | Purpose |
-|---|---|---|
-| React | 18.3.1 | UI framework |
-| TypeScript | 5.6 | Type safety |
-| Vite | 5.4.9 | Build tool & dev server |
-| Tailwind CSS | 3.4.13 | Utility-first styling |
-| Framer Motion | 11.0 | Animations |
-| Socket.IO Client | 4.8.3 | WebSocket real-time connection |
-| Axios | 1.7.7 | HTTP client with auth interceptors |
-| Recharts | — | Analytics charts |
+![React](https://img.shields.io/badge/React_18-0d9488?style=flat-square&logo=react&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript_5.6-0891b2?style=flat-square&logo=typescript&logoColor=white)
+![Vite](https://img.shields.io/badge/Vite_5-0f766e?style=flat-square&logo=vite&logoColor=white)
+![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-0284c7?style=flat-square&logo=tailwindcss&logoColor=white)
+![Framer Motion](https://img.shields.io/badge/Framer_Motion-06b6d4?style=flat-square&logo=framer&logoColor=white)
+![Socket.IO](https://img.shields.io/badge/Socket.IO_4-0369a1?style=flat-square&logo=socketdotio&logoColor=white)
+![Axios](https://img.shields.io/badge/Axios-0891b2?style=flat-square&logo=axios&logoColor=white)
+![Recharts](https://img.shields.io/badge/Recharts-0d9488?style=flat-square&logo=chartdotjs&logoColor=white)
 
-### Backend
+**Backend**
 
-| Technology | Version | Purpose |
-|---|---|---|
-| Flask | 3.x | Web framework |
-| Flask-SocketIO | 5.3.6+ | WebSocket server |
-| SQLAlchemy | 2.x | ORM and database abstraction |
-| PyJWT + bcrypt | 2.8.0+ | Authentication and password hashing |
-| Celery | 5.3.0+ | Background task queue |
-| Redis | 5.0.0+ | Task broker and rate limit store |
-| Flask-Limiter | 4.0.0+ | API rate limiting |
-| ReportLab | 4.0.0+ | PDF generation |
-| Resend | 2.0.0+ | Email notifications |
-| Gunicorn | — | Production WSGI server |
+![Flask](https://img.shields.io/badge/Flask_3-0f766e?style=flat-square&logo=flask&logoColor=white)
+![Python](https://img.shields.io/badge/Python_3.12-0284c7?style=flat-square&logo=python&logoColor=white)
+![SQLAlchemy](https://img.shields.io/badge/SQLAlchemy_2-0d9488?style=flat-square&logo=sqlalchemy&logoColor=white)
+![Celery](https://img.shields.io/badge/Celery_5-0891b2?style=flat-square&logo=celery&logoColor=white)
+![Redis](https://img.shields.io/badge/Redis_7-06b6d4?style=flat-square&logo=redis&logoColor=white)
+![JWT](https://img.shields.io/badge/PyJWT-0369a1?style=flat-square&logo=jsonwebtokens&logoColor=white)
+![ReportLab](https://img.shields.io/badge/ReportLab-0f766e?style=flat-square&logo=adobeacrobatreader&logoColor=white)
+![Gunicorn](https://img.shields.io/badge/Gunicorn-0284c7?style=flat-square&logo=gunicorn&logoColor=white)
 
-### AI & Machine Learning
+**AI & Machine Learning**
 
-| Model | Provider | Purpose |
-|---|---|---|
-| Whisper large-v3 | Groq API | Real-time speech-to-text |
-| Llama-3.1-8b-instant | Groq API | Medical field extraction |
-| Llama-3.3-70b-versatile | Groq API | Speaker diarization (text-based) |
-| pyannote/speaker-diarization-3.1 | HuggingFace | Audio-based diarization (optional) |
-| phi3:mini | Ollama (local) | Offline extraction fallback |
-| Web Speech API | Browser (Chrome/Edge) | Voice command recognition |
+![Groq Whisper](https://img.shields.io/badge/Whisper_large--v3-06b6d4?style=flat-square&logo=openai&logoColor=white)
+![Llama 3.1](https://img.shields.io/badge/Llama_3.1_8b-0d9488?style=flat-square&logo=meta&logoColor=white)
+![Llama 3.3](https://img.shields.io/badge/Llama_3.3_70b-0891b2?style=flat-square&logo=meta&logoColor=white)
+![Pyannote](https://img.shields.io/badge/Pyannote_Audio-0284c7?style=flat-square&logo=huggingface&logoColor=white)
+![Ollama](https://img.shields.io/badge/Ollama_phi3:mini-0f766e?style=flat-square&logo=ollama&logoColor=white)
+![Web Speech API](https://img.shields.io/badge/Web_Speech_API-06b6d4?style=flat-square&logo=googlechrome&logoColor=white)
 
-### Infrastructure
+**Infrastructure**
 
-| Component | Technology |
-|---|---|
-| Database | Supabase PostgreSQL (cloud-hosted, SSL enforced) |
-| Containerization | Docker Compose |
-| Reverse Proxy | Nginx |
-| CI/CD | GitHub Actions (recommended) |
-
----
-
+![PostgreSQL](https://img.shields.io/badge/Supabase_PostgreSQL-0369a1?style=flat-square&logo=postgresql&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker_Compose-0284c7?style=flat-square&logo=docker&logoColor=white)
+![Nginx](https://img.shields.io/badge/Nginx-0d9488?style=flat-square&logo=nginx&logoColor=white)
+![AWS EC2](https://img.shields.io/badge/AWS_EC2-0891b2?style=flat-square&logo=amazonec2&logoColor=white)
 
 ---
 
@@ -220,8 +210,8 @@ The system transcribes every word in real time, identifies who is the doctor and
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/MQ-06/audient-ai.git
-cd audient-ai
+git clone https://github.com/AsifAbbas1090/Audient-AI.git
+cd Audient-AI
 
 # 2. Create the environment file
 cp backend/.env.example backend/.env
@@ -234,7 +224,7 @@ docker compose run --rm backend python migrate.py
 docker compose up --build
 
 # 5. Open in browser
-#    Frontend  →  http://localhost:3000
+#    Frontend  →  http://localhost:80
 #    API       →  http://localhost:5000
 #    Health    →  http://localhost:5000/health
 ```
@@ -248,7 +238,6 @@ docker compose up --build
 ```bash
 cd backend
 
-# Create and activate virtual environment
 python -m venv .venv
 .venv\Scripts\activate          # Windows
 source .venv/bin/activate       # macOS / Linux
@@ -276,31 +265,18 @@ npm run dev                     # Start on http://localhost:3000
 
 ---
 
-### First-Time Admin Setup
-
-After signing up through the UI, promote your account to admin via the Supabase SQL Editor:
-
-```sql
-UPDATE users SET role = 'admin' WHERE email = 'your@email.com';
-```
-
----
-
 ## Environment Variables
 
 ### `backend/.env` — Required
 
 ```env
 # ── DATABASE ───────────────────────────────────────────────────────
-# Supabase: Project Settings → Database → Connection String → URI
 DATABASE_URL=postgresql://postgres:<password>@db.<ref>.supabase.co:5432/postgres
 
 # ── AI ─────────────────────────────────────────────────────────────
-# Free at https://console.groq.com
 GROQ_API_KEY=gsk_...
 
 # ── SECURITY ───────────────────────────────────────────────────────
-# Any random string, 32+ characters each
 JWT_SECRET_KEY=your-random-jwt-secret-key
 SECRET_KEY=your-random-flask-secret-key
 ```
@@ -308,27 +284,18 @@ SECRET_KEY=your-random-flask-secret-key
 ### `backend/.env` — Optional Enhancements
 
 ```env
-# ── TASK QUEUE (recommended for production) ────────────────────────
 REDIS_URL=redis://localhost:6379/0
 
-# ── SPEAKER DIARIZATION (audio-based, more accurate) ───────────────
-# Accept model at: https://huggingface.co/pyannote/speaker-diarization-3.1
-# Then: pip install pyannote.audio torch torchaudio
-HF_TOKEN=hf_...
+HF_TOKEN=hf_...                          # Pyannote speaker diarization
 
-# ── OFFLINE FALLBACK (no internet required) ────────────────────────
-# Requires Ollama running locally with phi3:mini pulled
-OLLAMA_BASE_URL=http://localhost:11434/v1
+OLLAMA_BASE_URL=http://localhost:11434/v1 # Offline fallback
 OLLAMA_EXTRACT_MODEL=phi3:mini
 
-# ── EMAIL NOTIFICATIONS ────────────────────────────────────────────
-RESEND_API_KEY=re_...
+RESEND_API_KEY=re_...                    # Email notifications
 
-# ── MODEL OVERRIDES ────────────────────────────────────────────────
 GROQ_DIARIZE_MODEL=llama-3.3-70b-versatile
 GROQ_EXTRACT_MODEL=llama-3.1-8b-instant
 
-# ── SERVER ─────────────────────────────────────────────────────────
 PORT=5000
 FLASK_DEBUG=true
 ```
@@ -341,7 +308,6 @@ VITE_API_URL=http://localhost:5000
 
 ---
 
-
 ## Deployment
 
 ### Localhost (Docker Compose)
@@ -353,23 +319,89 @@ docker compose down -v             # Stop and remove volumes (fresh start)
 docker compose logs -f backend     # Stream backend logs
 ```
 
-Services started:
-
 | Container | URL | Purpose |
 |---|---|---|
-| `audient-frontend` | http://localhost:3000 | React SPA |
-| `audient-backend` | http://localhost:5000 | Flask API + Socket.IO |
+| `audient-frontend` | http://localhost:80 | React SPA served by Nginx |
+| `audient-backend` | Internal port 5000 | Flask API + Socket.IO |
 | `audient-redis` | Internal port 6379 | Celery broker |
 | `audient-worker` | — | Celery background worker |
-| `audient-nginx` | http://localhost:80 | Reverse proxy |
+
+### AWS EC2 (Production)
+
+The live deployment runs on AWS EC2 (Ubuntu) using Docker Compose behind Nginx (inside the `web` container).
+
+```bash
+# On the EC2 instance — one command deploys everything
+./deploy.sh
+```
+
+`deploy.sh` runs: `git pull` → `docker compose down` → `docker compose build --no-cache` → `python migrate.py` → `docker compose up -d` → health check.
+
+> **Live at → [https://13.210.144.218/](https://13.210.144.218/)**
 
 ---
 
-
-
 ## Screenshots
 
-> *(Insert screenshots of the following pages in your final submission)*
+<table>
+<tr>
+<td align="center" width="50%">
+
+**Landing Page**
+![Landing Page](screenshots/Screenshot%202026-05-18%20011701.png)
+
+</td>
+<td align="center" width="50%">
+
+**Live Session Recording**
+![Live Session](screenshots/Screenshot%202026-05-18%20011318.png)
+
+</td>
+</tr>
+<tr>
+<td align="center" width="50%">
+
+**Consultation — Transcript + Medical Extraction**
+![Consultation View](screenshots/Screenshot%202026-05-18%20010947.png)
+
+</td>
+<td align="center" width="50%">
+
+**Analytics Dashboard**
+![Analytics](screenshots/Screenshot%202026-05-18%20011630.png)
+
+</td>
+</tr>
+<tr>
+<td align="center" width="50%">
+
+**Template Builder**
+![Templates](screenshots/Screenshot%202026-05-18%20011610.png)
+
+</td>
+<td align="center" width="50%">
+
+**Admin Dashboard**
+![Admin Panel](screenshots/Screenshot%202026-05-18%20010138.png)
+
+</td>
+</tr>
+<tr>
+<td align="center" width="50%">
+
+**Registration**
+![Registration](screenshots/Screenshot%202026-05-18%20010407.png)
+
+</td>
+<td align="center" width="50%">
+
+**User Management**
+![Users](screenshots/Screenshot%202026-05-18%20010149.png)
+
+</td>
+</tr>
+</table>
+
 ---
 
 ## Contributing
@@ -393,20 +425,8 @@ git commit -m "fix: describe what you fixed"
 4. Open a Pull Request targeting `dev`
 
 **Branches:**
-- `main` → final production-ready code (tagged releases)
+- `main` → production-ready code (tagged releases)
 - `dev` → active development and feature merges
-
----
-
-## Known Limitations
-
-| Item | Status | Notes |
-|---|---|---|
-| Audio persistence | Not implemented | `AudioFile` model scaffolded; upload pipeline not built |
-| Email password reset | Partial | Resend integrated for notifications, not for password reset |
-| HIPAA / PDPA compliance | Not implemented | Supabase handles encryption at rest; app-layer controls not built |
-| Voice commands | Chrome / Edge only | Web Speech API not available in Firefox or Safari |
-| Pyannote diarization | Optional | Requires local GPU + HuggingFace token; Groq LLM fallback always works |
 
 ---
 
@@ -417,8 +437,8 @@ git commit -m "fix: describe what you fixed"
 | | |
 |---|---|
 | **Project** | Audient AI — AI-Powered Medical Consultation System |
-| **Developer** | Muhammad Asif Abbas  |
-| **GitHub** | github.com/masifabbas1090 |
+| **Developer** | Muhammad Asif Abbas |
+| **GitHub** | [github.com/AsifAbbas1090](https://github.com/AsifAbbas1090) |
 | **Email** | masifabbas1090@gmail.com |
 | **Supervisor** | Sir Adeel Nisar |
 | **Institution** | Final Year Project — Information Technology |
@@ -430,7 +450,7 @@ git commit -m "fix: describe what you fixed"
 
 ## License
 
-This project is developed as an academic Final Year Project. Not licensed for commercial use without explicit permission from the authors.
+This project is developed as an academic Final Year Project. Not licensed for commercial use without explicit permission from the author.
 
 ---
 
