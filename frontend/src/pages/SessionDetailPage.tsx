@@ -16,6 +16,7 @@ import { Badge }         from '../components/ui/Badge'
 import { Card }          from '../components/ui/Card'
 import { SpeakerBubble } from '../components/visual/SpeakerBubble'
 import { useToast }      from '../components/ui/Toaster'
+import { DeleteSessionControl } from '../components/DeleteSessionControl'
 import ConsultModal      from '../components/ConsultModal'
 import api from '../lib/api'
 
@@ -853,6 +854,21 @@ export default function SessionDetailPage() {
                 Continue Session
               </Button>
             ) : null}
+
+            {isOwner && (
+              <DeleteSessionControl
+                sessionId={conv.id}
+                sessionTitle={conv.title}
+                locked={isApproved}
+                canDelete
+                variant="header"
+                onDeleted={() => {
+                  toast('Session deleted permanently', 'success')
+                  navigate('/app')
+                }}
+                onError={msg => toast(msg, 'error')}
+              />
+            )}
           </div>
         </header>
 

@@ -11,6 +11,8 @@ import { Sidebar }    from '../components/ui/Sidebar'
 import { Badge }      from '../components/ui/Badge'
 import { StatCard }   from '../components/visual/StatCard'
 import { SkeletonCard } from '../components/ui/Skeleton'
+import { DeleteSessionControl } from '../components/DeleteSessionControl'
+import { useToast } from '../components/ui/Toaster'
 import { usePreferencesUser } from '../hooks/usePreferencesUser'
 import { getSpecialtyUi } from '../lib/specialtyUi'
 import { cn }         from '../utils/cn'
@@ -58,9 +60,20 @@ const statusConfig = {
 }
 
 // ── Session Card ─────────────────────────────────────────────
-function SessionCard({ conv, index }: { conv: Conv; index: number }) {
+function SessionCard({
+  conv,
+  index,
+  onDeleted,
+  onDeleteError,
+}: {
+  conv: Conv
+  index: number
+  onDeleted: (id: string) => void
+  onDeleteError: (msg: string) => void
+}) {
   const cfg = statusConfig[conv.status]
   const navigate = useNavigate()
+  const locked = conv.status === 'approved'
 
   return (
     <motion.div
@@ -97,7 +110,18 @@ function SessionCard({ conv, index }: { conv: Conv; index: number }) {
                 )}
               </div>
             </div>
-            <div className="shrink-0">{cfg.badge}</div>
+            <div className="flex items-center gap-1 shrink-0">
+              <DeleteSessionControl
+                sessionId={conv.id}
+                sessionTitle={conv.title}
+                locked={locked}
+                canDelete
+                variant="card"
+                onDeleted={() => onDeleted(conv.id)}
+                onError={onDeleteError}
+              />
+              {cfg.badge}
+            </div>
           </div>
 
           <p className="text-sm text-slate-400 light:text-slate-600 mt-3 leading-relaxed line-clamp-2 min-h-[40px]">
@@ -202,6 +226,7 @@ function SpecialtyFocusPanel({ specUi }: { specUi: ReturnType<typeof getSpecialt
 export default function DashboardPage() {
   const user = usePreferencesUser()
   const specUi = getSpecialtyUi(user?.specialty)
+  const toast = useToast()
 
   const [convs,        setConvs]        = useState<Conv[]>([])
   const [loading,      setLoading]      = useState(true)
@@ -397,7 +422,16 @@ export default function DashboardPage() {
               : filtered.length === 0
               ? <EmptyState query={query} specialtyHint={specUi.emptyHint} />
               : filtered.map((c, i) => (
-                  <SessionCard key={c.id} conv={c} index={i} />
+                  <SessionCard
+                    key={c.id}
+                    conv={c}
+                    index={i}
+                    onDeleted={id => {
+                      setConvs(prev => prev.filter(x => x.id !== id))
+                      toast('Session deleted permanently', 'success')
+                    }}
+                    onDeleteError={msg => toast(msg, 'error')}
+                  />
                 ))
             }
           </div>

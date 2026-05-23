@@ -5,7 +5,7 @@ Conversation management routes:
   GET    /api/conversations/:id          — get single conversation with transcript + summary
   GET    /api/conversations/:id/status   — lightweight status poll (for background task progress)
   PATCH  /api/conversations/:id          — update title/status
-  DELETE /api/conversations/:id          — delete (owner or admin)
+  DELETE /api/conversations/:id          — permanent delete (owner; admin for locked)
   POST   /api/conversations/:id/complete — finalise a live session (dispatches background task)
   POST   /api/conversations/:id/audio   — upload & store audio file
   PATCH  /api/conversations/:id/reminders/:rid/resolve — resolve a field reminder
@@ -629,24 +629,80 @@ def update_conversation(conv_id: str):
 
 # ── Delete ───────────────────────────────────────────────────────────────────
 
+def _purge_conversation_files(conv_id: str, conv: Conversation) -> None:
+    """Remove on-disk audio/temp artifacts for this session (best-effort)."""
+    from config import Config
+
+    candidates: list[str] = [
+        os.path.join(Config.SESSIONS_DIR, f"{conv_id}.wav"),
+    ]
+    if conv.audio_file and conv.audio_file.file_url:
+        candidates.append(conv.audio_file.file_url)
+    audio_dir = os.path.join(Config.SESSIONS_DIR, "audio")
+    for ext in (".webm", ".wav", ".mp3", ".ogg"):
+        candidates.append(os.path.join(audio_dir, f"{conv_id}{ext}"))
+
+    seen: set[str] = set()
+    for path in candidates:
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        try:
+            if os.path.isfile(path):
+                os.remove(path)
+        except OSError as e:
+            print(f"[delete] could not remove file {path}: {e}")
+
+    # Drop in-memory live-session state if the recorder is still open elsewhere.
+    try:
+        from routes import socket_handlers
+
+        socket_handlers._session_context.pop(conv_id, None)
+        socket_handlers._session_diarize_labels.pop(conv_id, None)
+        socket_handlers._session_chunk_buffer.pop(conv_id, None)
+        socket_handlers._session_anchor_pool.pop(conv_id, None)
+        from services import audio_service
+
+        audio_service._sessions.pop(conv_id, None)
+    except Exception as e:
+        print(f"[delete] socket/audio cleanup skipped: {e}")
+
+
 @conversations_bp.route("/<string:conv_id>", methods=["DELETE"])
 @require_auth
 def delete_conversation(conv_id: str):
+    """
+    Permanently delete a session and all related rows (transcript, summary, access grants, etc.).
+
+    Approved (locked) sessions cannot be deleted by clinicians — admins only.
+    """
     conv = Conversation.query.get(conv_id)
     if not conv:
         return jsonify({"error": "Conversation not found"}), 404
     if conv.user_id and conv.user_id != g.user_id and g.user_role != "admin":
         return jsonify({"error": "Access denied"}), 403
+    if conv.status == "approved" and g.user_role != "admin":
+        return jsonify({
+            "error": "This record is approved and locked. It cannot be deleted.",
+        }), 403
 
+    title = conv.title
     try:
-        conv.deleted_at = datetime.now(timezone.utc)
-        log_action("session_deleted", "conversation", conv.id, {"title": conv.title})
+        _purge_conversation_files(conv_id, conv)
+        log_action(
+            "session_deleted",
+            "conversation",
+            conv_id,
+            {"title": title, "hard_delete": True},
+        )
+        db.session.delete(conv)
         db.session.commit()
     except Exception as e:
         db.session.rollback()
+        print(f"[conversations/delete] error: {e}")
         return jsonify({"error": str(e)}), 500
 
-    return jsonify({"message": "Conversation deleted"}), 200
+    return jsonify({"message": "Session permanently deleted", "conversation_id": conv_id}), 200
 
 
 # ── Update summary (medical fields) ──────────────────────────────────────────
